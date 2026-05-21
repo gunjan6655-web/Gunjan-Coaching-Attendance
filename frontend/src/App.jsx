@@ -1317,14 +1317,16 @@ function StudentForm({ info, student, onClose, onSaved, refreshInfo }) {
       />
 
       <label>Fee Due Day <span className="small muted">— day of the month when fee is due</span></label>
-      <select
-        value={form.feeDueDay || 5}
-        onChange={e => setForm({ ...form, feeDueDay: Number(e.target.value) })}
-      >
+      <div className="day-picker">
         {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
-          <option key={d} value={d}>{d}{d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : 'th'} of every month</option>
+          <button
+            key={d}
+            type="button"
+            className={'day-btn' + ((form.feeDueDay || 5) === d ? ' selected' : '')}
+            onClick={() => setForm({ ...form, feeDueDay: d })}
+          >{d}</button>
         ))}
-      </select>
+      </div>
 
       <label>Batch</label>
       {(info.batches?.length || 0) === 0 ? (
@@ -3588,11 +3590,23 @@ function ProfileModal({ studentId, onClose }) {
 
 // Student edits their own bio/Instagram
 function StudentBioEditor({ student }) {
-  const [bio, setBio] = useState(student.bio || '');
-  const [insta, setInsta] = useState(student.instagram || '');
+  const [bio, setBio] = useState('');
+  const [insta, setInsta] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState('');
+
+  // Fetch fresh data on mount so bio persists across tab switches
+  useEffect(() => {
+    api.get('/students').then(r => {
+      const s = Array.isArray(r.data) ? r.data[0] : null;
+      if (s) { setBio(s.bio || ''); setInsta(s.instagram || ''); }
+      else { setBio(student.bio || ''); setInsta(student.instagram || ''); }
+    }).catch(() => {
+      setBio(student.bio || '');
+      setInsta(student.instagram || '');
+    });
+  }, [student._id]);
 
   const save = async () => {
     setSaving(true); setErr('');
