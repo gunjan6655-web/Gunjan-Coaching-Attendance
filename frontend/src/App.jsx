@@ -1316,14 +1316,15 @@ function StudentForm({ info, student, onClose, onSaved, refreshInfo }) {
         placeholder="e.g. 5000"
       />
 
-      <label>Fee Due Day <span className="small muted">— day of the month when fee is due (1-28)</span></label>
-      <input
-        type="number"
-        min="1"
-        max="28"
+      <label>Fee Due Day <span className="small muted">— day of the month when fee is due</span></label>
+      <select
         value={form.feeDueDay || 5}
-        onChange={e => setForm({ ...form, feeDueDay: Math.min(28, Math.max(1, Number(e.target.value) || 5)) })}
-      />
+        onChange={e => setForm({ ...form, feeDueDay: Number(e.target.value) })}
+      >
+        {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+          <option key={d} value={d}>{d}{d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : 'th'} of every month</option>
+        ))}
+      </select>
 
       <label>Batch</label>
       {(info.batches?.length || 0) === 0 ? (
@@ -2819,7 +2820,6 @@ function AIAssistant({ chatMode }) {
   );
 }
 
-// ----- GROUP CHAT (request #14) -----
 function GroupChat({ role, currentName }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -2874,6 +2874,16 @@ function GroupChat({ role, currentName }) {
     } finally { setSending(false); }
   };
 
+  const deleteMsg = async (id) => {
+    if (!confirm('Delete this message for everyone?')) return;
+    try {
+      await api.delete('/chat/messages/' + id);
+      setMessages(m => m.filter(x => x._id !== id));
+    } catch (err) {
+      alert('Failed: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
   return (
     <div className="chat-shell">
       <div className="chat-header">
@@ -2903,6 +2913,11 @@ function GroupChat({ role, currentName }) {
                   {isTeacher && <span className="chat-tag">Teacher</span>}
                   {m.rollNumber && !mine && <span className="muted small"> #{m.rollNumber}</span>}
                   <span className="muted small chat-time">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  {role === 'teacher' && (
+                    <button className="btn-link small" onClick={() => deleteMsg(m._id)} style={{ marginLeft: 8, opacity: 0.5, color: '#ef4444' }} title="Delete message">
+                      <Trash2 size={11} />
+                    </button>
+                  )}
                 </div>
                 <div className="chat-text">{m.text}</div>
               </div>
@@ -3872,9 +3887,15 @@ function ParentTeacherChat({ studentId, role, currentName }) {
   };
 
   const deleteMsg = async (id) => {
-    if (!confirm('Delete this message for yourself? (The other person will still see it.)')) return;
-    await api.post('/parent-chat/' + id + '/delete');
-    setMessages(m => m.filter(x => x._id !== id));
+    const isTeacher = role === 'teacher';
+    if (!confirm(isTeacher ? 'Delete this message for everyone?' : 'Delete this message for yourself? (The other person will still see it.)')) return;
+    if (isTeacher) {
+      await api.delete('/parent-chat/' + id + '/hard-delete');
+      setMessages(m => m.filter(x => x._id !== id));
+    } else {
+      await api.post('/parent-chat/' + id + '/delete');
+      setMessages(m => m.filter(x => x._id !== id));
+    }
   };
 
   return (
@@ -3895,9 +3916,9 @@ function ParentTeacherChat({ studentId, role, currentName }) {
                   <span className="muted small chat-time">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 <div className="chat-text">{m.text}</div>
-                {mine && (
+                {(mine || role === 'teacher') && (
                   <button className="btn-link small" onClick={() => deleteMsg(m._id)} style={{ marginTop: 2, opacity: 0.6 }}>
-                    <Trash2 size={10} /> delete
+                    <Trash2 size={10} /> {role === 'teacher' && !mine ? 'delete' : 'delete'}
                   </button>
                 )}
               </div>
@@ -3970,7 +3991,7 @@ function ParentChatTab() {
   return <ParentConversationsList onSelect={setSelected} />;
 }
 
-// Teacher Fees tab: switches between "Overview" (all students) and "Pending"
+// Teacher Fees tab: switches between "Overview", "Pending", and "Paid"
 function TeacherFeesTab({ info }) {
   const [sub, setSub] = useState('overview');
   return (
@@ -3978,9 +3999,70 @@ function TeacherFeesTab({ info }) {
       <div className="row" style={{ gap: 6, marginBottom: 12 }}>
         <button className={'btn btn-mini ' + (sub === 'overview' ? 'btn-primary' : 'btn-outline')} onClick={() => setSub('overview')}>Overview</button>
         <button className={'btn btn-mini ' + (sub === 'pending' ? 'btn-primary' : 'btn-outline')} onClick={() => setSub('pending')}><AlertCircle size={12} /> Pending</button>
+        <button className={'btn btn-mini ' + (sub === 'paid' ? 'btn-primary' : 'btn-outline')} onClick={() => setSub('paid')}><CheckCircle size={12} /> Paid</button>
       </div>
       {sub === 'overview' && <FeesTab info={info} />}
       {sub === 'pending' && <PendingFeesTab />}
+      {sub === 'paid' && <PaidFeesTab />}
+    </div>
+  );
+}
+
+// Shows who has paid fees this month
+function PaidFeesTab() {
+  const [month, setMonth] = useState(new Date().toISOString().substring(0, 7));
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/fees/paid', { params: { month } });
+      setData(r.data);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [month]);
+
+  if (loading) return <p className="muted">Loading…</p>;
+
+  const totalCollected = (data?.paid || []).reduce((a, s) => a + (s.paidAmount || s.monthlyFee || 0), 0);
+
+  return (
+    <div>
+      <div className="row">
+        <label style={{ margin: 0 }}>Month:</label>
+        <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="sort-select" />
+        <button className="btn btn-outline btn-mini" onClick={load}><RefreshCw size={12} /></button>
+      </div>
+
+      <div className="summary-stats">
+        <div className="stat-big green"><strong>{data?.totalPaid || 0}</strong><span>Paid</span></div>
+        <div className="stat-big blue"><strong>{formatRupee(totalCollected)}</strong><span>Collected</span></div>
+      </div>
+
+      {(!data?.paid?.length) ? (
+        <div className="empty"><IndianRupee size={48} color="#999" /><h3>No payments yet</h3><p className="muted">No one has been marked as paid for {month}.</p></div>
+      ) : (
+        <div className="pending-fees-list">
+          {data.paid.map(s => (
+            <div key={s._id} className="pending-fee-row" style={{ borderLeft: '4px solid #16a34a' }}>
+              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1 }}>
+                {s.photo ? <img src={s.photo} alt="" className="student-avatar" /> : <div className="student-avatar placeholder"><User size={20} /></div>}
+                <div>
+                  <strong>{s.name}</strong>
+                  <p className="small muted" style={{ margin: '2px 0 0' }}>
+                    Roll #{s.rollNumber} · {formatRupee(s.paidAmount || s.monthlyFee || 0)}
+                    {s.paidOn && <span> · Paid {new Date(s.paidOn).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+                    {s.note && <span> · "{s.note}"</span>}
+                  </p>
+                </div>
+              </div>
+              <span className="badge green"><CheckCircle size={12} /> Paid</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
