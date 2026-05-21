@@ -556,6 +556,8 @@ app.post('/api/students', authenticate, teacherOnly, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Student self-edit (bio, instagram, photo) — MUST be before /:id route
 app.put('/api/students/me', authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'student') return res.status(403).json({ error: 'Student only' });
@@ -573,6 +575,7 @@ app.put('/api/students/me', authenticate, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.put('/api/students/:id', authenticate, teacherOnly, async (req, res) => {
   try {
     const update = { ...req.body };
@@ -1257,25 +1260,27 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
   }
 });
 
-// ===========================
-// STUDENT SELF-EDIT (bio, instagram)
-// ===========================
+// Teacher can hard-delete any group chat message
+app.delete('/api/chat/messages/:id', authenticate, teacherOnly, async (req, res) => {
   try {
-    if (req.user.role !== 'student') return res.status(403).json({ error: 'Student only' });
-    const allowed = {};
-    if (typeof req.body.bio === 'string') allowed.bio = req.body.bio.slice(0, 500);
-    if (typeof req.body.instagram === 'string') allowed.instagram = req.body.instagram.slice(0, 200);
-    if (typeof req.body.photo === 'string') {
-      if (req.body.photo.length > 600000) return res.status(413).json({ error: 'Photo too large' });
-      allowed.photo = req.body.photo;
-    }
-    await Student.findByIdAndUpdate(req.user.studentId, allowed);
-    const s = await Student.findById(req.user.studentId);
-    res.json({ ok: true, student: s });
+    await ChatMessage.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Teacher hard-deletes a parent chat message (removes for both sides)
+app.delete('/api/parent-chat/:id/hard-delete', authenticate, teacherOnly, async (req, res) => {
+  try {
+    await ParentMessage.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// (students/me PUT is defined earlier, before /:id route)
 
 // Get a single student's public profile (for chat profile modal)
 // Returns ONLY fields that are safe to expose to other students
@@ -1320,6 +1325,28 @@ app.get('/api/fees/pending', authenticate, teacherOnly, async (req, res) => {
         dueDay: s.feeDueDay || 5,
       }));
     res.json({ month: yyyymm, pending, totalPaid: paid.length, totalPending: pending.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Who has PAID this month (for teacher paid list)
+app.get('/api/fees/paid', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const yyyymm = req.query.month || istDateISO().substring(0, 7);
+    const payments = await FeePayment.find({ month: yyyymm });
+    const paidIds = payments.map(p => p.studentId);
+    const students = await Student.find({ _id: { $in: paidIds }, pendingApproval: { $ne: true } })
+      .select('name rollNumber monthlyFee photo className parentPhone');
+    const payMap = {};
+    payments.forEach(p => { payMap[String(p.studentId)] = p; });
+    const result = students.map(s => ({
+      ...s.toObject(),
+      paidOn: payMap[String(s._id)]?.paidOn,
+      paidAmount: payMap[String(s._id)]?.amount,
+      note: payMap[String(s._id)]?.note,
+    }));
+    res.json({ month: yyyymm, paid: result, totalPaid: result.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
