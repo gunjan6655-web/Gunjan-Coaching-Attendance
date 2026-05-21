@@ -556,7 +556,23 @@ app.post('/api/students', authenticate, teacherOnly, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
+app.put('/api/students/me', authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'student') return res.status(403).json({ error: 'Student only' });
+    const allowed = {};
+    if (typeof req.body.bio === 'string') allowed.bio = req.body.bio.slice(0, 500);
+    if (typeof req.body.instagram === 'string') allowed.instagram = req.body.instagram.slice(0, 200);
+    if (typeof req.body.photo === 'string') {
+      if (req.body.photo.length > 600000) return res.status(413).json({ error: 'Photo too large' });
+      allowed.photo = req.body.photo;
+    }
+    await Student.findByIdAndUpdate(req.user.studentId, allowed);
+    const s = await Student.findById(req.user.studentId);
+    res.json({ ok: true, student: s });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.put('/api/students/:id', authenticate, teacherOnly, async (req, res) => {
   try {
     const update = { ...req.body };
@@ -1244,7 +1260,6 @@ app.post('/api/chat/messages', authenticate, async (req, res) => {
 // ===========================
 // STUDENT SELF-EDIT (bio, instagram)
 // ===========================
-app.put('/api/students/me', authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'student') return res.status(403).json({ error: 'Student only' });
     const allowed = {};
