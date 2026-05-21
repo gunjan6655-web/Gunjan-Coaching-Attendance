@@ -10,6 +10,8 @@ body {
   line-height: 1.5;
   font-size: 15px;
 }
+/* Prevent iOS from zooming in when focusing inputs (requires font-size >= 16px) */
+input, textarea, select { font-size: 16px !important; touch-action: manipulation; }
 a { color: #c2410c; text-decoration: none; }
 a:hover { text-decoration: underline; }
 hr { border: 0; border-top: 1px solid #e7e2da; margin: 16px 0; }
