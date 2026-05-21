@@ -12,6 +12,17 @@ body {
 }
 /* Prevent iOS from zooming in when focusing inputs (requires font-size >= 16px) */
 input, textarea, select { font-size: 16px !important; touch-action: manipulation; }
+
+/* Day picker grid for fee due day */
+.day-picker { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.day-btn {
+  width: 40px; height: 40px; border-radius: 8px;
+  border: 1.5px solid #e7e2da; background: #fff;
+  font-size: 14px !important; font-weight: 500; cursor: pointer;
+  color: #1f1f1f; transition: all 0.15s;
+}
+.day-btn:hover { border-color: #c2410c; color: #c2410c; }
+.day-btn.selected { background: #c2410c; border-color: #c2410c; color: #fff; font-weight: 700; }
 a { color: #c2410c; text-decoration: none; }
 a:hover { text-decoration: underline; }
 hr { border: 0; border-top: 1px solid #e7e2da; margin: 16px 0; }
