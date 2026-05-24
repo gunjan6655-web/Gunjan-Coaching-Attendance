@@ -2108,3 +2108,22 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* Already-marked tile in hand-to-student mode */
 .student-mode-tile.already-marked { opacity: 0.7; background: #f0fdf4; border: 1.5px solid #16a34a; }
+
+/* Emoji picker */
+.emoji-picker { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; background: var(--color-bg, #fff); border: 1px solid #e5e7eb; border-radius: 12px; margin-bottom: 6px; max-height: 120px; overflow-y: auto; }
+.emoji-btn { background: none; border: none; font-size: 22px; cursor: pointer; padding: 2px; border-radius: 6px; line-height: 1; }
+.emoji-btn:hover { background: #f3f4f6; }
+
+/* Chat media buttons */
+.chat-media-btn { background: none; border: none; cursor: pointer; padding: 6px; color: #6b7280; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.chat-media-btn:hover { background: #f3f4f6; }
+.chat-media-btn:disabled { opacity: 0.4; }
+
+/* Location link in chat */
+.chat-location-link { display: inline-block; background: #eff6ff; color: #1d4ed8; border-radius: 8px; padding: 8px 12px; margin-top: 4px; font-size: 14px; text-decoration: none; }
+.chat-location-link:hover { background: #dbeafe; }
+
+/* Fix attendance calendar overflow on mobile */
+.att-graph-card { overflow-x: auto; }
+.att-cal { display: grid; grid-template-columns: repeat(7, minmax(32px, 1fr)); gap: 3px; min-width: 240px; }
+.att-cal-cell { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 6px; font-size: 12px; font-weight: 500; }
