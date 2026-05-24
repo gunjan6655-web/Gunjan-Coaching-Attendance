@@ -185,7 +185,10 @@ const ChatMessageSchema = new mongoose.Schema({
   name: { type: String, required: true },
   rollNumber: String,
   photo: String, // sender's profile photo (base64) stored at send time
-  text: { type: String, required: true },
+  text: { type: String, default: '' },
+  messageType: { type: String, enum: ['text', 'image', 'location', 'emoji'], default: 'text' },
+  image: String, // base64 compressed image for image messages
+  locationData: { lat: Number, lng: Number, address: String }, // for location messages
   createdAt: { type: Date, default: Date.now, index: true },
 });
 
@@ -1234,29 +1237,74 @@ app.get('/api/chat/messages', authenticate, async (req, res) => {
 app.post('/api/chat/messages', authenticate, async (req, res) => {
   try {
     if (!['teacher', 'student'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
-    const text = (req.body.text || '').trim();
-    if (!text) return res.status(400).json({ error: 'Empty message' });
-    if (text.length > 1000) return res.status(400).json({ error: 'Too long (max 1000 chars)' });
+    const { text, messageType, image, locationData } = req.body;
+    const mType = messageType || 'text';
+
+    // Validate content based on type
+    if (mType === 'text' && !(text || '').trim()) return res.status(400).json({ error: 'Empty message' });
+    if (mType === 'image' && !image) return res.status(400).json({ error: 'Image required' });
+    if (mType === 'location' && !locationData) return res.status(400).json({ error: 'Location required' });
+    if ((text || '').length > 1000) return res.status(400).json({ error: 'Too long (max 1000 chars)' });
+    // Limit image size to ~300KB base64
+    if (image && image.length > 400000) return res.status(413).json({ error: 'Image too large. Please use a smaller image.' });
+
     let name = 'Teacher';
     let rollNumber = '';
     let studentId = null;
-    let photo = '';
+    let senderPhoto = '';
     if (req.user.role === 'student') {
       const s = await Student.findById(req.user.studentId).select('name rollNumber photo');
       if (!s) return res.status(404).json({ error: 'Student not found' });
-      name = s.name;
-      rollNumber = s.rollNumber;
-      studentId = req.user.studentId;
-      photo = s.photo || '';
+      name = s.name; rollNumber = s.rollNumber; studentId = req.user.studentId; senderPhoto = s.photo || '';
     } else {
-      const cfg = await Config.findOne().select('teacherName');
+      const cfg = await Config.findOne().select('teacherName teacherPhoto');
       name = cfg?.teacherName || 'Teacher';
+      senderPhoto = cfg?.teacherPhoto || '';
     }
     const msg = new ChatMessage({
-      role: req.user.role, studentId, name, rollNumber, photo, text,
+      role: req.user.role, studentId, name, rollNumber, photo: senderPhoto,
+      text: (text || '').trim(),
+      messageType: mType,
+      image: mType === 'image' ? image : undefined,
+      locationData: mType === 'location' ? locationData : undefined,
     });
     await msg.save();
     res.json({ ok: true, message: msg });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete all attendance records for a specific month (teacher only)
+app.delete('/api/attendance/month/:month', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const month = req.params.month; // YYYY-MM
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Invalid month format (use YYYY-MM)' });
+    const result = await Attendance.deleteMany({ date: { $regex: '^' + month } });
+    res.json({ ok: true, deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete all fee payment records for a specific month (teacher only)
+app.delete('/api/fees/month/:month', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const month = req.params.month; // YYYY-MM
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'Invalid month format (use YYYY-MM)' });
+    const result = await FeePayment.deleteMany({ month });
+    res.json({ ok: true, deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get list of months that have attendance data
+app.get('/api/attendance/months', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const records = await Attendance.find().select('date').lean();
+    const months = [...new Set(records.map(r => r.date.substring(0, 7)))].sort().reverse();
+    res.json({ months });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
