@@ -273,6 +273,9 @@ function Landing({ info, onSignIn, onRegister }) {
             {info.teacherName && <p className="small muted" style={{ marginTop: 6 }}>{info.teacherName}</p>}
           </div>
         )}
+        {info.teacherBio && (info.teacherBioVisibility === 'everyone' || info.teacherBioVisibility === 'landing') && (
+          <p style={{ textAlign: 'center', color: '#555', marginBottom: 16, fontStyle: 'italic' }}>"{info.teacherBio}"</p>
+        )}
         <div className="info-grid">
           {info.teacherName && <div className="info-row"><User size={18} /><span>{info.teacherName}</span></div>}
           {info.phone && <div className="info-row"><Phone size={18} /><a href={`tel:${info.phone}`}>{info.phone}</a></div>}
@@ -655,6 +658,14 @@ function PickStudent({ students, role, onPick, onBack }) {
   );
 }
 
+// LazyTab: only mounts when first visited, then keeps alive (hidden) to preserve state
+function LazyTab({ active, children }) {
+  const [everActive, setEverActive] = useState(false);
+  useEffect(() => { if (active) setEverActive(true); }, [active]);
+  if (!everActive) return null;
+  return <div style={{ display: active ? '' : 'none' }}>{children}</div>;
+}
+
 // ============================
 // TEACHER DASHBOARD
 // ============================
@@ -711,15 +722,15 @@ function TeacherDashboard({ info, announcements, onSignOut, refreshInfo }) {
       </nav>
 
       <main className="tab-content">
-        <div style={{display: tab==='today' ? '' : 'none'}}><TodayTab info={info} announcements={announcements} /></div>
-        <div style={{display: tab==='students' ? '' : 'none'}}><StudentsTab info={info} refreshInfo={refreshInfo} /></div>
-        <div style={{display: tab==='summary' ? '' : 'none'}}><SummaryTab info={info} /></div>
-        <div style={{display: tab==='fees' ? '' : 'none'}}><TeacherFeesTab info={info} /></div>
-        <div style={{display: tab==='exams' ? '' : 'none'}}><ExamsTab /></div>
-        <div style={{display: tab==='holidays' ? '' : 'none'}}><AnnouncementsTab info={info} /></div>
-        <div style={{display: tab==='chat' ? '' : 'none'}}><GroupChat role="teacher" currentName={info.teacherName || 'Teacher'} /></div>
-        <div style={{display: tab==='messages' ? '' : 'none'}}><ParentChatTab /></div>
-        <div style={{display: tab==='settings' ? '' : 'none'}}><SettingsTab info={info} refreshInfo={refreshInfo} /></div>
+        <LazyTab active={tab==='today'}><TodayTab info={info} announcements={announcements} /></LazyTab>
+        <LazyTab active={tab==='students'}><StudentsTab info={info} refreshInfo={refreshInfo} /></LazyTab>
+        <LazyTab active={tab==='summary'}><SummaryTab info={info} /></LazyTab>
+        <LazyTab active={tab==='fees'}><TeacherFeesTab info={info} /></LazyTab>
+        <LazyTab active={tab==='exams'}><ExamsTab /></LazyTab>
+        <LazyTab active={tab==='holidays'}><AnnouncementsTab info={info} /></LazyTab>
+        <LazyTab active={tab==='chat'}><GroupChat role="teacher" currentName={info.teacherName || 'Teacher'} info={info} /></LazyTab>
+        <LazyTab active={tab==='messages'}><ParentChatTab /></LazyTab>
+        <LazyTab active={tab==='settings'}><SettingsTab info={info} refreshInfo={refreshInfo} /></LazyTab>
       </main>
     </div>
   );
@@ -825,8 +836,9 @@ function TodayTab({ info, announcements }) {
   const [reason, setReason] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [batchFilter, setBatchFilter] = useState('');
+  const [classFilter, setClassFilter] = useState('');
   const [studentMode, setStudentMode] = useState(false);
-  const [studentModeDone, setStudentModeDone] = useState(null); // name of who just marked, for confirmation
+  const [studentModeDone, setStudentModeDone] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -842,21 +854,21 @@ function TodayTab({ info, announcements }) {
 
   const getAtt = (id) => todayAtt.find(a => String(a.studentId) === String(id));
 
+  const nowHM = () => new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+
   const markPresent = (id) => {
-    // Instant UI update — no waiting
-    const now = istTimeHM ? istTimeHM() : new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const optimistic = { _id: 'opt_' + id, studentId: id, status: 'present', markedBy: 'teacher', inTime: '', outTime: '', date: todayISO() };
+    const t = nowHM();
+    const optimistic = { _id: 'opt_' + id, studentId: id, status: 'present', markedBy: 'teacher', inTime: t, outTime: '', date: todayISO() };
     setTodayAtt(prev => {
       const exists = prev.find(a => String(a.studentId) === String(id));
-      if (exists) return prev.map(a => String(a.studentId) === String(id) ? { ...a, status: 'present', markedBy: 'teacher' } : a);
+      if (exists) return prev.map(a => String(a.studentId) === String(id) ? { ...a, status: 'present', markedBy: 'teacher', inTime: t } : a);
       return [...prev, optimistic];
     });
-    // Background save
     api.post('/attendance/teacher-mark', { studentId: id, status: 'present' })
       .then(r => setTodayAtt(prev => prev.map(a => String(a.studentId) === String(id) ? r.data : a)))
       .catch(err => {
         setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(id)));
-        alert('Failed to save: ' + err.message);
+        alert('Failed: ' + err.message);
       });
   };
 
@@ -939,7 +951,10 @@ function TodayTab({ info, announcements }) {
     );
   }
 
-  const visible = batchFilter ? students.filter(s => s.batchId === batchFilter) : students;
+  const allClasses = [...new Set(students.map(s => s.className).filter(Boolean))].sort();
+  const visible = [...students]
+    .filter(s => (!batchFilter || s.batchId === batchFilter) && (!classFilter || s.className === classFilter))
+    .sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
   const birthdayStudents = visible.filter(s => isBirthdayToday(s.birthday));
   const upcomingBirthdays = visible
     .map(s => ({ s, d: daysUntilBirthday(s.birthday) }))
@@ -1004,6 +1019,12 @@ function TodayTab({ info, announcements }) {
           <select className="sort-select" value={batchFilter} onChange={e => setBatchFilter(e.target.value)}>
             <option value="">All batches</option>
             {info.batches.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
+          </select>
+        )}
+        {allClasses.length > 0 && (
+          <select className="sort-select" value={classFilter} onChange={e => setClassFilter(e.target.value)}>
+            <option value="">All classes</option>
+            {allClasses.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
         {!offDay && (
@@ -1094,6 +1115,7 @@ function StudentsTab({ info, refreshInfo }) {
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('roll');
   const [batchFilter, setBatchFilter] = useState('');
+  const [classFilter, setClassFilter] = useState('');
   const [showCodeFor, setShowCodeFor] = useState(null);
   const [enlargedPhoto, setEnlargedPhoto] = useState(null);
 
@@ -1125,16 +1147,17 @@ function StudentsTab({ info, refreshInfo }) {
     load();
   };
 
+  const allClasses = [...new Set(students.map(s => s.className).filter(Boolean))].sort();
   let filtered = students.filter(s =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
     (s.rollNumber || '').includes(search) ||
     (s.phone || '').includes(search)
   );
   if (batchFilter) filtered = filtered.filter(s => s.batchId === batchFilter);
+  if (classFilter) filtered = filtered.filter(s => s.className === classFilter);
   filtered = [...filtered].sort((a, b) => {
     if (sortBy === 'name') return a.name.localeCompare(b.name);
-    if (sortBy === 'roll') return Number(b.rollNumber || 0) - Number(a.rollNumber || 0); // newest (highest roll) first
-    return 0;
+    return Number(a.rollNumber || 999) - Number(b.rollNumber || 999); // ascending roll
   });
 
   if (loading) return <p className="muted">Loading...</p>;
@@ -1173,6 +1196,12 @@ function StudentsTab({ info, refreshInfo }) {
           <Search size={16} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll, or phone" />
         </div>
+        {allClasses.length > 0 && (
+          <select className="sort-select" value={classFilter} onChange={e => setClassFilter(e.target.value)}>
+            <option value="">All classes</option>
+            {allClasses.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
         {(info.batches?.length || 0) > 0 && (
           <select className="sort-select" value={batchFilter} onChange={e => setBatchFilter(e.target.value)}>
             <option value="">All batches</option>
@@ -1180,8 +1209,8 @@ function StudentsTab({ info, refreshInfo }) {
           </select>
         )}
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="sort-select">
-          <option value="name">Sort by Name</option>
           <option value="roll">Sort by Roll #</option>
+          <option value="name">Sort by Name</option>
         </select>
         <button className="btn btn-outline btn-mini" onClick={load} title="Refresh"><RefreshCw size={14} /></button>
         <button className="btn btn-primary" onClick={() => setAdding(true)}>
@@ -1510,6 +1539,7 @@ function SummaryTab({ info }) {
   const [history, setHistory] = useState([]);
   const [studentFees, setStudentFees] = useState(null);
   const [search, setSearch] = useState('');
+  const [classFilter, setClassFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [monthFilter, setMonthFilter] = useState('');
   const [allSummaries, setAllSummaries] = useState({}); // {studentId: {present, absent, percentage}}
@@ -1552,7 +1582,10 @@ function SummaryTab({ info }) {
     </div>
   );
 
-  const filtered = students.filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
+  const allClasses = [...new Set(students.map(s => s.className).filter(Boolean))].sort();
+  const filtered = [...students]
+    .filter(s => (!classFilter || s.className === classFilter) && s.name.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
   const filteredHistory = monthFilter ? history.filter(h => h.date.startsWith(monthFilter)) : history;
   const monthOptions = Array.from(new Set(history.map(h => h.date.substring(0, 7)))).sort().reverse();
 
@@ -1609,6 +1642,12 @@ function SummaryTab({ info }) {
             <Search size={16} />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search students" />
           </div>
+          {allClasses.length > 0 && (
+            <select className="sort-select" value={classFilter} onChange={e => setClassFilter(e.target.value)} style={{ marginTop: 8, width: '100%' }}>
+              <option value="">All classes</option>
+              {allClasses.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
           <div className="list">
             {filtered.map(s => {
               const sm = allSummaries[s._id];
@@ -1848,9 +1887,10 @@ function FeesTab({ info }) {
   if (loading) return <p className="muted">Loading fees…</p>;
   if (!data) return <p className="muted">No data.</p>;
 
-  let rows = data.students;
+  let rows = [...(data.students || [])];
   if (batchFilter) rows = rows.filter(s => s.batchId === batchFilter);
   if (classFilter) rows = rows.filter(s => s.className === classFilter);
+  rows = rows.sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
 
   const monthlyTotal = rows.reduce((a, r) => a + (r.fees?.monthlyFee || 0), 0);
   const dailyTotal   = rows.reduce((a, r) => a + (r.fees?.perDay     || 0), 0);
@@ -2220,6 +2260,27 @@ function SettingsTab({ info, refreshInfo }) {
       <h3 style={{ marginBottom: 8 }}><Camera size={16} /> My Profile Photo</h3>
       <p className="small muted">Students and parents will see this photo in contact info.</p>
       <PhotoCapture value={form.teacherPhoto || ''} onChange={(p) => setForm(f => ({ ...f, teacherPhoto: p }))} />
+
+      <hr />
+      <h3 style={{ marginBottom: 8 }}><User size={16} /> My Bio</h3>
+      <label>About me (shown to students/parents)</label>
+      <textarea
+        rows={4}
+        value={form.teacherBio || ''}
+        onChange={e => setForm(f => ({ ...f, teacherBio: e.target.value.slice(0, 500) }))}
+        placeholder="Tell students a bit about yourself — your experience, subjects, teaching style…"
+      />
+      <p className="small muted text-right" style={{ textAlign: 'right' }}>{(form.teacherBio || '').length}/500</p>
+      <label>Show my bio to</label>
+      <select
+        value={form.teacherBioVisibility || 'everyone'}
+        onChange={e => setForm(f => ({ ...f, teacherBioVisibility: e.target.value }))}
+      >
+        <option value="everyone">Everyone (landing page + group chat)</option>
+        <option value="landing">Landing page only</option>
+        <option value="chat">Group chat only (when tapped)</option>
+        <option value="none">Nobody (hidden)</option>
+      </select>
 
       <hr />
       <label>Coaching Name</label>
@@ -2951,12 +3012,13 @@ function AIAssistant({ chatMode }) {
   );
 }
 
-function GroupChat({ role, currentName }) {
+function GroupChat({ role, currentName, info }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [profileFor, setProfileFor] = useState(null);
+  const [showTeacherProfile, setShowTeacherProfile] = useState(false);
   const scrollRef = useRef(null);
   const lastTsRef = useRef(null);
 
@@ -3026,7 +3088,14 @@ function GroupChat({ role, currentName }) {
         {messages.map(m => {
           const mine = (role === 'teacher' && m.role === 'teacher') || (role !== 'teacher' && m.name === currentName);
           const isTeacher = m.role === 'teacher';
-          const handleProfile = () => { if (!isTeacher && m.studentId) setProfileFor(m.studentId); };
+          const handleProfile = () => {
+            if (isTeacher) {
+              const vis = info?.teacherBioVisibility || 'everyone';
+              if (vis === 'everyone' || vis === 'chat') setShowTeacherProfile(true);
+            } else if (m.studentId) {
+              setProfileFor(m.studentId);
+            }
+          };
           return (
             <div key={m._id} className={'chat-row ' + (mine ? 'me' : 'them')}>
               {!mine && (
@@ -3077,6 +3146,20 @@ function GroupChat({ role, currentName }) {
         <button className="btn btn-primary" onClick={send} disabled={sending || !input.trim()}><Send size={14} /></button>
       </div>
       {profileFor && <ProfileModal studentId={profileFor} onClose={() => setProfileFor(null)} />}
+      {showTeacherProfile && info && (
+        <Modal onClose={() => setShowTeacherProfile(false)} title="">
+          <div className="profile-modal-content">
+            {info.teacherPhoto
+              ? <img src={info.teacherPhoto} alt={info.teacherName} className="profile-modal-photo" />
+              : <div className="profile-modal-photo placeholder"><GraduationCap size={48} /></div>}
+            <h2 className="display" style={{ margin: 0 }}>{info.teacherName || 'Teacher'}</h2>
+            <p className="muted small">Teacher</p>
+            {info.teacherBio && (info.teacherBioVisibility === 'everyone' || info.teacherBioVisibility === 'chat') && (
+              <div className="profile-modal-bio">{info.teacherBio}</div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -3294,7 +3377,7 @@ function StudentChatDashboard({ student, info, announcements, onSignOut }) {
 
       <main className="dash-main">
         {tab === 'mark' && <StudentMarkPresent student={student} />}
-        {tab === 'chat' && <GroupChat role="student" currentName={student?.name} />}
+        {tab === 'chat' && <GroupChat role="student" currentName={student?.name} info={info} />}
         {tab === 'exams' && <div className="container-narrow"><h3><BookOpen size={16} /> Exams & Tests</h3><ExamList /></div>}
         {tab === 'holidays' && <div className="container-narrow"><h3><CalendarOff size={16} /> Holidays & Announcements</h3><AnnouncementList announcements={announcements || []} info={info} /></div>}
         {tab === 'complaint' && <div className="container-narrow"><ComplaintCompose /></div>}
