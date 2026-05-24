@@ -75,6 +75,8 @@ const ConfigSchema = new mongoose.Schema({
   teacherPassword: String,
   teacherName: String,
   teacherPhoto: String,  // base64 profile photo for teacher
+  teacherBio: { type: String, default: '' },
+  teacherBioVisibility: { type: String, enum: ['everyone', 'landing', 'chat', 'none'], default: 'everyone' },
   phone: String,
   email: String,
   classroomName: String,
