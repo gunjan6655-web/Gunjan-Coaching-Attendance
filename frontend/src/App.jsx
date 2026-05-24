@@ -2292,7 +2292,7 @@ function SettingsTab({ info, refreshInfo }) {
       <label>Email</label>
       <input value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} />
       <label>Map URL (Google Maps link)</label>
-      <input value={form.mapUrl || ''} onChange={e => setForm({...form, mapUrl: e.target.value})} />
+      <LocationPicker value={form.mapUrl || ''} onChange={v => setForm({...form, mapUrl: v})} />
       <label>Default Class Start Time</label>
       <input type="time" value={form.classStart || ''} onChange={e => setForm({...form, classStart: e.target.value})} />
       <label>Default Class End Time</label>
@@ -2373,6 +2373,121 @@ function SettingsTab({ info, refreshInfo }) {
 
       <hr />
       <StorageCard />
+      <hr />
+      <MonthlyDataManager />
+    </div>
+  );
+}
+
+// Location picker — type address or use GPS
+function LocationPicker({ value, onChange }) {
+  const [locating, setLocating] = useState(false);
+  const [err, setErr] = useState('');
+
+  const useGPS = () => {
+    setErr('');
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        onChange(url);
+        setLocating(false);
+      },
+      () => { setErr('Could not get location. Please type the URL manually.'); setLocating(false); }
+    );
+  };
+
+  return (
+    <div>
+      <div className="row" style={{ gap: 8 }}>
+        <input
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder="Paste Google Maps link, or tap GPS below"
+          style={{ flex: 1 }}
+        />
+        <button type="button" className="btn btn-outline btn-mini" onClick={useGPS} disabled={locating}>
+          <MapPin size={14} /> {locating ? 'Finding...' : 'Use My GPS'}
+        </button>
+      </div>
+      {err && <p className="small" style={{ color: '#ef4444', marginTop: 4 }}>{err}</p>}
+      {value && (
+        <a href={value} target="_blank" rel="noreferrer" className="small" style={{ color: '#0a84ff', display: 'block', marginTop: 4 }}>
+          ↗ Preview location on map
+        </a>
+      )}
+      <p className="small muted" style={{ marginTop: 4 }}>
+        Or open <a href="https://maps.google.com" target="_blank" rel="noreferrer">Google Maps</a>, find your location, tap Share → Copy link, and paste it above.
+      </p>
+    </div>
+  );
+}
+
+// Monthly data manager — delete old attendance/fee data to save storage
+function MonthlyDataManager() {
+  const [months, setMonths] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/attendance/months');
+      setMonths(r.data.months || []);
+    } catch { } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const deleteMonth = async (month, type) => {
+    if (!confirm(`Delete all ${type} records for ${month}? This cannot be undone!`)) return;
+    setDeleting(month + type);
+    try {
+      const endpoint = type === 'attendance' ? `/attendance/month/${month}` : `/fees/month/${month}`;
+      const r = await api.delete(endpoint);
+      alert(`Deleted ${r.data.deleted} ${type} records for ${month}.`);
+      if (type === 'attendance') load();
+    } catch (e) {
+      alert('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setDeleting(null); }
+  };
+
+  if (loading) return <p className="muted small">Loading data history…</p>;
+
+  return (
+    <div>
+      <h3 style={{ marginBottom: 8 }}>📊 Monthly Data Management</h3>
+      <p className="small muted">Delete old month data to free up storage space. <strong>This cannot be undone.</strong></p>
+      {months.length === 0 ? (
+        <p className="small muted">No attendance records found.</p>
+      ) : (
+        <div className="list" style={{ marginTop: 8 }}>
+          {months.map(m => (
+            <div key={m} className="history-row" style={{ alignItems: 'center' }}>
+              <strong>{m}</strong>
+              <div className="row" style={{ gap: 6 }}>
+                <button
+                  className="btn btn-outline btn-mini"
+                  onClick={() => deleteMonth(m, 'attendance')}
+                  disabled={!!deleting}
+                  style={{ color: '#ef4444', borderColor: '#ef4444' }}
+                >
+                  <Trash2 size={12} /> {deleting === m + 'attendance' ? 'Deleting…' : 'Delete Attendance'}
+                </button>
+                <button
+                  className="btn btn-outline btn-mini"
+                  onClick={() => deleteMonth(m, 'fees')}
+                  disabled={!!deleting}
+                  style={{ color: '#d97706', borderColor: '#d97706' }}
+                >
+                  <Trash2 size={12} /> {deleting === m + 'fees' ? 'Deleting…' : 'Delete Fee Records'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3019,6 +3134,8 @@ function GroupChat({ role, currentName, info }) {
   const [error, setError] = useState('');
   const [profileFor, setProfileFor] = useState(null);
   const [showTeacherProfile, setShowTeacherProfile] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const imageRef = useRef(null);
   const scrollRef = useRef(null);
   const lastTsRef = useRef(null);
 
@@ -3058,13 +3175,61 @@ function GroupChat({ role, currentName, info }) {
     if (!text || sending) return;
     setSending(true);
     try {
-      const r = await api.post('/chat/messages', { text });
+      const r = await api.post('/chat/messages', { text, messageType: 'text' });
       setMessages(m => [...m, r.data.message]);
       lastTsRef.current = r.data.message.createdAt;
       setInput('');
+      setShowEmoji(false);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to send');
     } finally { setSending(false); }
+  };
+
+  const sendImage = async (file) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { alert('Image too large. Max 5MB.'); return; }
+    setSending(true);
+    try {
+      // Compress to max 400x400
+      const image = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const max = 400;
+            const ratio = Math.min(max / img.width, max / img.height, 1);
+            canvas.width = img.width * ratio; canvas.height = img.height * ratio;
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.6));
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      });
+      const r = await api.post('/chat/messages', { text: '', messageType: 'image', image });
+      setMessages(m => [...m, r.data.message]);
+      lastTsRef.current = r.data.message.createdAt;
+    } catch (err) { setError(err.response?.data?.error || 'Failed to send image'); }
+    finally { setSending(false); }
+  };
+
+  const sendLocation = () => {
+    if (!navigator.geolocation) { alert('Geolocation not supported on this device.'); return; }
+    setSending(true);
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      try {
+        const r = await api.post('/chat/messages', {
+          text: `📍 Location shared`,
+          messageType: 'location',
+          locationData: { lat, lng, address: `${lat.toFixed(5)}, ${lng.toFixed(5)}` }
+        });
+        setMessages(m => [...m, r.data.message]);
+        lastTsRef.current = r.data.message.createdAt;
+      } catch (err) { setError('Failed to send location'); }
+      finally { setSending(false); }
+    }, () => { alert('Could not get location.'); setSending(false); });
   };
 
   const deleteMsg = async (id) => {
@@ -3119,7 +3284,15 @@ function GroupChat({ role, currentName, info }) {
                     </button>
                   )}
                 </div>
-                <div className="chat-text">{m.text}</div>
+                {m.messageType === 'image' && m.image ? (
+                  <img src={m.image} alt="shared" style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, marginTop: 4, cursor: 'pointer' }} onClick={() => window.open(m.image)} />
+                ) : m.messageType === 'location' && m.locationData ? (
+                  <a href={`https://www.google.com/maps?q=${m.locationData.lat},${m.locationData.lng}`} target="_blank" rel="noreferrer" className="chat-location-link">
+                    📍 View Location on Map
+                  </a>
+                ) : (
+                  <div className="chat-text">{m.text}</div>
+                )}
               </div>
               {mine && (
                 <div className="chat-avatar">
@@ -3135,7 +3308,18 @@ function GroupChat({ role, currentName, info }) {
         })}
       </div>
       {error && <div className="error-box small">{error}</div>}
+      {showEmoji && (
+        <div className="emoji-picker">
+          {['😀','😂','😊','😍','🥰','😎','👍','❤️','🙏','🎉','🔥','✅','👏','😢','😮','🤔','💯','🌟','📚','✏️','🏆','💪','🤝','📞','🙂','😅','😇','🥳','💐','🎂'].map(e => (
+            <button key={e} className="emoji-btn" onClick={() => { setInput(prev => prev + e); setShowEmoji(false); }}>{e}</button>
+          ))}
+        </div>
+      )}
       <div className="chat-input-row">
+        <button className="chat-media-btn" onClick={() => setShowEmoji(s => !s)} title="Emoji">😊</button>
+        <input ref={imageRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { sendImage(e.target.files?.[0]); e.target.value = ''; }} />
+        <button className="chat-media-btn" onClick={() => imageRef.current?.click()} title="Send Photo" disabled={sending}><Camera size={18} /></button>
+        <button className="chat-media-btn" onClick={sendLocation} title="Send Location" disabled={sending}><MapPin size={18} /></button>
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
@@ -3855,11 +4039,12 @@ function StudentBioEditor({ student }) {
 }
 
 // Pending fees tab for teacher
-function PendingFeesTab() {
+function PendingFeesTab({ info }) {
   const [month, setMonth] = useState(new Date().toISOString().substring(0, 7));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState(null);
+  const [viewingStudent, setViewingStudent] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -3879,6 +4064,11 @@ function PendingFeesTab() {
     } catch (e) {
       alert('Failed: ' + (e.response?.data?.error || e.message));
     } finally { setMarking(null); }
+  };
+
+  const reminderMsg = (s) => {
+    const teacherName = info?.teacherName || 'Your Teacher';
+    return `Hi, I am ${teacherName}. I am teaching your kid, and this is a reminder that ${s.name}'s fee of ${formatRupee(s.monthlyFee)} for ${month} is pending. Please pay at your earliest convenience.\nThank you.`;
   };
 
   if (loading) return <p className="muted">Loading…</p>;
@@ -3902,7 +4092,7 @@ function PendingFeesTab() {
         <div className="pending-fees-list">
           {data?.pending?.map(s => (
             <div key={s._id} className={'pending-fee-row' + (s.overdue ? ' overdue' : '')}>
-              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1 }}>
+              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1, cursor: 'pointer' }} onClick={() => setViewingStudent(s)}>
                 {s.photo ? <img src={s.photo} alt="" className="student-avatar" /> : <div className="student-avatar placeholder"><User size={20} /></div>}
                 <div>
                   <strong>{s.name}</strong>
@@ -3910,12 +4100,13 @@ function PendingFeesTab() {
                     Roll #{s.rollNumber} · {formatRupee(s.monthlyFee)} · Due day {s.dueDay}
                     {s.overdue && <span className="badge red small" style={{ marginLeft: 8 }}>OVERDUE</span>}
                   </p>
+                  <p className="small muted" style={{ margin: 0 }}><Eye size={10} /> Tap for details</p>
                 </div>
               </div>
               <div className="row" style={{ gap: 6 }}>
                 {s.parentPhone && (
                   <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
-                    href={whatsappLink(s.parentPhone, `Hi, this is a reminder that ${s.name}'s fee of ${formatRupee(s.monthlyFee)} for ${month} is pending. Please pay at your earliest convenience.`)}>
+                    href={whatsappLink(s.parentPhone, reminderMsg(s))}>
                     <MessageCircle size={12} /> Remind
                   </a>
                 )}
@@ -3926,6 +4117,9 @@ function PendingFeesTab() {
             </div>
           ))}
         </div>
+      )}
+      {viewingStudent && (
+        <StudentDetailModal student={viewingStudent} info={info || {}} onClose={() => setViewingStudent(null)} onEdit={() => setViewingStudent(null)} />
       )}
     </div>
   );
@@ -4221,9 +4415,9 @@ function TeacherFeesTab({ info }) {
         <button className={'btn btn-mini ' + (sub === 'pending' ? 'btn-primary' : 'btn-outline')} onClick={() => setSub('pending')}><AlertCircle size={12} /> Pending</button>
         <button className={'btn btn-mini ' + (sub === 'paid' ? 'btn-primary' : 'btn-outline')} onClick={() => setSub('paid')}><CheckCircle size={12} /> Paid</button>
       </div>
-      {sub === 'overview' && <FeesTab info={info} />}
-      {sub === 'pending' && <PendingFeesTab />}
-      {sub === 'paid' && <PaidFeesTab />}
+      <LazyTab active={sub === 'overview'}><FeesTab info={info} /></LazyTab>
+      <LazyTab active={sub === 'pending'}><PendingFeesTab info={info} /></LazyTab>
+      <LazyTab active={sub === 'paid'}><PaidFeesTab /></LazyTab>
     </div>
   );
 }
@@ -4233,6 +4427,7 @@ function PaidFeesTab() {
   const [month, setMonth] = useState(new Date().toISOString().substring(0, 7));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [viewingStudent, setViewingStudent] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -4255,18 +4450,16 @@ function PaidFeesTab() {
         <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="sort-select" />
         <button className="btn btn-outline btn-mini" onClick={load}><RefreshCw size={12} /></button>
       </div>
-
       <div className="summary-stats">
         <div className="stat-big green"><strong>{data?.totalPaid || 0}</strong><span>Paid</span></div>
         <div className="stat-big blue"><strong>{formatRupee(totalCollected)}</strong><span>Collected</span></div>
       </div>
-
       {(!data?.paid?.length) ? (
         <div className="empty"><IndianRupee size={48} color="#999" /><h3>No payments yet</h3><p className="muted">No one has been marked as paid for {month}.</p></div>
       ) : (
         <div className="pending-fees-list">
           {data.paid.map(s => (
-            <div key={s._id} className="pending-fee-row" style={{ borderLeft: '4px solid #16a34a' }}>
+            <div key={s._id} className="pending-fee-row" style={{ borderLeft: '4px solid #16a34a', cursor: 'pointer' }} onClick={() => setViewingStudent(s)}>
               <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1 }}>
                 {s.photo ? <img src={s.photo} alt="" className="student-avatar" /> : <div className="student-avatar placeholder"><User size={20} /></div>}
                 <div>
@@ -4282,6 +4475,9 @@ function PaidFeesTab() {
             </div>
           ))}
         </div>
+      )}
+      {viewingStudent && (
+        <StudentDetailModal student={viewingStudent} info={{}} onClose={() => setViewingStudent(null)} onEdit={() => setViewingStudent(null)} />
       )}
     </div>
   );
