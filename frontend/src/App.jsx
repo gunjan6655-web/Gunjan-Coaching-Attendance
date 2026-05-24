@@ -259,8 +259,8 @@ function Landing({ info, onSignIn, onRegister }) {
           </div>
           <div className="card">
             <MessageCircle size={28} color="#9333ea" />
-            <h3>Chat &amp; AI</h3>
-            <p>Group chat, private complaints to teacher, and a multilingual AI assistant for everyone.</p>
+            <h3>Chat</h3>
+            <p>Group chat for all students, private messages to teacher, and fee reminders for parents.</p>
           </div>
         </div>
       </section>
@@ -711,15 +711,15 @@ function TeacherDashboard({ info, announcements, onSignOut, refreshInfo }) {
       </nav>
 
       <main className="tab-content">
-        {tab === 'today' && <TodayTab info={info} announcements={announcements} />}
-        {tab === 'students' && <StudentsTab info={info} refreshInfo={refreshInfo} />}
-        {tab === 'summary' && <SummaryTab info={info} />}
-        {tab === 'fees' && <TeacherFeesTab info={info} />}
-        {tab === 'exams' && <ExamsTab />}
-        {tab === 'holidays' && <AnnouncementsTab info={info} />}
-        {tab === 'chat' && <GroupChat role="teacher" currentName={info.teacherName || 'Teacher'} />}
-        {tab === 'messages' && <ParentChatTab />}
-        {tab === 'settings' && <SettingsTab info={info} refreshInfo={refreshInfo} />}
+        <div style={{display: tab==='today' ? '' : 'none'}}><TodayTab info={info} announcements={announcements} /></div>
+        <div style={{display: tab==='students' ? '' : 'none'}}><StudentsTab info={info} refreshInfo={refreshInfo} /></div>
+        <div style={{display: tab==='summary' ? '' : 'none'}}><SummaryTab info={info} /></div>
+        <div style={{display: tab==='fees' ? '' : 'none'}}><TeacherFeesTab info={info} /></div>
+        <div style={{display: tab==='exams' ? '' : 'none'}}><ExamsTab /></div>
+        <div style={{display: tab==='holidays' ? '' : 'none'}}><AnnouncementsTab info={info} /></div>
+        <div style={{display: tab==='chat' ? '' : 'none'}}><GroupChat role="teacher" currentName={info.teacherName || 'Teacher'} /></div>
+        <div style={{display: tab==='messages' ? '' : 'none'}}><ParentChatTab /></div>
+        <div style={{display: tab==='settings' ? '' : 'none'}}><SettingsTab info={info} refreshInfo={refreshInfo} /></div>
       </main>
     </div>
   );
@@ -842,51 +842,74 @@ function TodayTab({ info, announcements }) {
 
   const getAtt = (id) => todayAtt.find(a => String(a.studentId) === String(id));
 
-  const markPresent = async (id) => {
-    try {
-      const r = await api.post('/attendance/teacher-mark', { studentId: id, status: 'present' });
-      setTodayAtt(prev => {
-        const exists = prev.find(a => String(a.studentId) === String(id));
-        if (exists) return prev.map(a => String(a.studentId) === String(id) ? r.data : a);
-        return [...prev, r.data];
+  const markPresent = (id) => {
+    // Instant UI update — no waiting
+    const now = istTimeHM ? istTimeHM() : new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const optimistic = { _id: 'opt_' + id, studentId: id, status: 'present', markedBy: 'teacher', inTime: '', outTime: '', date: todayISO() };
+    setTodayAtt(prev => {
+      const exists = prev.find(a => String(a.studentId) === String(id));
+      if (exists) return prev.map(a => String(a.studentId) === String(id) ? { ...a, status: 'present', markedBy: 'teacher' } : a);
+      return [...prev, optimistic];
+    });
+    // Background save
+    api.post('/attendance/teacher-mark', { studentId: id, status: 'present' })
+      .then(r => setTodayAtt(prev => prev.map(a => String(a.studentId) === String(id) ? r.data : a)))
+      .catch(err => {
+        setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(id)));
+        alert('Failed to save: ' + err.message);
       });
-    } catch (err) { alert('Failed: ' + err.message); }
   };
 
-  const markAbsent = async () => {
-    try {
-      const r = await api.post('/attendance/teacher-mark', {
-        studentId: markingStudent._id,
-        status: 'absent',
-        reason: reason || 'No reason given'
+  const markAbsent = () => {
+    const sid = markingStudent._id;
+    const rsn = reason || 'No reason given';
+    // Instant UI update
+    const optimistic = { _id: 'opt_' + sid, studentId: sid, status: 'absent', markedBy: 'teacher', reason: rsn, date: todayISO() };
+    setTodayAtt(prev => {
+      const exists = prev.find(a => String(a.studentId) === String(sid));
+      if (exists) return prev.map(a => String(a.studentId) === String(sid) ? { ...a, status: 'absent', reason: rsn, markedBy: 'teacher' } : a);
+      return [...prev, optimistic];
+    });
+    setMarkingStudent(null); setReason('');
+    // Background save
+    api.post('/attendance/teacher-mark', { studentId: sid, status: 'absent', reason: rsn })
+      .then(r => setTodayAtt(prev => prev.map(a => String(a.studentId) === String(sid) ? r.data : a)))
+      .catch(err => {
+        setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(sid)));
+        alert('Failed to save: ' + err.message);
       });
-      setTodayAtt(prev => {
-        const exists = prev.find(a => String(a.studentId) === String(markingStudent._id));
-        if (exists) return prev.map(a => String(a.studentId) === String(markingStudent._id) ? r.data : a);
-        return [...prev, r.data];
-      });
-      setMarkingStudent(null); setReason('');
-    } catch (err) { alert('Failed: ' + err.message); }
   };
 
-  // Feature #9: undo a "marked present by mistake" record
-  const unmark = async (studentId) => {
-    if (!confirm('Roll back today\'s attendance for this student?')) return;
-    try {
-      await api.delete('/attendance/unmark', { data: { studentId } });
-      setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(studentId)));
-    } catch (err) { alert('Failed: ' + err.message); }
+  // Undo: instant, no confirmation needed
+  const unmark = (studentId) => {
+    setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(studentId)));
+    api.delete('/attendance/unmark', { data: { studentId } })
+      .catch(err => {
+        load(); // revert on failure
+        alert('Failed: ' + err.message);
+      });
   };
 
   const markAllPresent = async () => {
     if (!confirm(batchFilter ? 'Mark everyone in this batch as present today?' : 'Mark all students as present today?')) return;
     setBulkLoading(true);
-    try {
-      const res = await api.post('/attendance/mark-all-present', batchFilter ? { batchId: batchFilter } : {});
-      load();
-      alert(`Marked ${res.data.marked} student(s) as present.`);
-    } catch (err) { alert('Failed: ' + err.message); }
-    finally { setBulkLoading(false); }
+    // Optimistic: mark all visible students present immediately
+    const today = todayISO();
+    setTodayAtt(prev => {
+      const markedIds = new Set(prev.map(a => String(a.studentId)));
+      const toAdd = visible.filter(s => !markedIds.has(String(s._id)))
+        .map(s => ({ _id: 'opt_' + s._id, studentId: s._id, status: 'present', markedBy: 'teacher', date: today }));
+      const updated = prev.map(a => {
+        const inVisible = visible.some(s => String(s._id) === String(a.studentId));
+        return inVisible ? { ...a, status: 'present', markedBy: 'teacher' } : a;
+      });
+      return [...updated, ...toAdd];
+    });
+    // Background save
+    api.post('/attendance/mark-all-present', batchFilter ? { batchId: batchFilter } : {})
+      .then(() => load())
+      .catch(err => { load(); alert('Failed: ' + err.message); })
+      .finally(() => setBulkLoading(false));
   };
 
   if (loading) return <p className="muted">Loading...</p>;
@@ -1069,7 +1092,7 @@ function StudentsTab({ info, refreshInfo }) {
   const [viewingPending, setViewingPending] = useState(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [sortBy, setSortBy] = useState('name');
+  const [sortBy, setSortBy] = useState('roll');
   const [batchFilter, setBatchFilter] = useState('');
   const [showCodeFor, setShowCodeFor] = useState(null);
   const [enlargedPhoto, setEnlargedPhoto] = useState(null);
@@ -1110,7 +1133,7 @@ function StudentsTab({ info, refreshInfo }) {
   if (batchFilter) filtered = filtered.filter(s => s.batchId === batchFilter);
   filtered = [...filtered].sort((a, b) => {
     if (sortBy === 'name') return a.name.localeCompare(b.name);
-    if (sortBy === 'roll') return (a.rollNumber || '').localeCompare(b.rollNumber || '');
+    if (sortBy === 'roll') return Number(b.rollNumber || 0) - Number(a.rollNumber || 0); // newest (highest roll) first
     return 0;
   });
 
@@ -2598,128 +2621,104 @@ function ParentDashboard({ student, info, announcements, onSignOut }) {
       </nav>
 
       <main className="tab-content">
-        {tab === 'summary' && summary && (
-          <div>
-            <div className="today-status">
-              {offDay ? (
-                <div className="big-card muted-card">
-                  <CalendarOff size={48} />
-                  <h3>Today is a holiday</h3>
-                  <p>{offDay.message}</p>
-                </div>
-              ) : todayAtt ? (
-                <div className={'big-card ' + (todayAtt.status === 'present' ? 'green' : 'red')}>
-                  {todayAtt.status === 'present' ? <CheckCircle size={48} /> : <XCircle size={48} />}
-                  <h3>Today: {todayAtt.status === 'present' ? 'Present' : 'Absent'}</h3>
-                  {todayAtt.inTime && <p>Checked in at: <strong>{todayAtt.inTime}</strong></p>}
-                  {todayAtt.outTime && <p>Checked out at: <strong>{todayAtt.outTime}</strong></p>}
-                  {todayAtt.reason && <p>Reason: <strong>{todayAtt.reason}</strong></p>}
-                  {todayAtt.markedBy === 'teacher' && <p className="small">Marked by teacher</p>}
-                  {todayAtt.markedBy === 'self' && <p className="small">Marked by student</p>}
-                </div>
-              ) : (
-                <div className="big-card muted-card">
-                  <Clock size={48} />
-                  <h3>Not marked yet today</h3>
-                  <p className="muted">{student?.name} hasn't checked in yet.</p>
-                </div>
+        <div style={{display: tab==='summary' ? '' : 'none'}}>
+          {summary && (
+            <div>
+              <div className="today-status">
+                {offDay ? (
+                  <div className="big-card muted-card"><CalendarOff size={48} /><h3>Today is a holiday</h3><p>{offDay.message}</p></div>
+                ) : todayAtt ? (
+                  <div className={'big-card ' + (todayAtt.status === 'present' ? 'green' : 'red')}>
+                    {todayAtt.status === 'present' ? <CheckCircle size={48} /> : <XCircle size={48} />}
+                    <h3>Today: {todayAtt.status === 'present' ? 'Present' : 'Absent'}</h3>
+                    {todayAtt.inTime && <p>Checked in at: <strong>{todayAtt.inTime}</strong></p>}
+                    {todayAtt.outTime && <p>Checked out at: <strong>{todayAtt.outTime}</strong></p>}
+                    {todayAtt.reason && <p>Reason: <strong>{todayAtt.reason}</strong></p>}
+                    {todayAtt.markedBy === 'teacher' && <p className="small">Marked by teacher</p>}
+                    {todayAtt.markedBy === 'self' && <p className="small">Marked by student</p>}
+                  </div>
+                ) : (
+                  <div className="big-card muted-card"><Clock size={48} /><h3>Not marked yet today</h3><p className="muted">{student?.name} hasn't checked in yet.</p></div>
+                )}
+              </div>
+              <div className="summary-stats">
+                <div className="stat-big green"><strong>{summary.present}</strong><span>Days Present</span></div>
+                <div className="stat-big red"><strong>{summary.absent}</strong><span>Days Absent</span></div>
+                <div className="stat-big blue"><strong>{summary.percentage}%</strong><span>Attendance</span></div>
+              </div>
+              {summary.absentDays?.length > 0 && (
+                <><h3>Recent Absences</h3>
+                  <div className="list">
+                    {summary.absentDays.slice(0, 5).map((a, i) => (
+                      <div key={i} className="history-row"><strong>{formatDate(a.date)}</strong><span className="small muted">{a.reason}</span></div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
-
-            <div className="summary-stats">
-              <div className="stat-big green"><strong>{summary.present}</strong><span>Days Present</span></div>
-              <div className="stat-big red"><strong>{summary.absent}</strong><span>Days Absent</span></div>
-              <div className="stat-big blue"><strong>{summary.percentage}%</strong><span>Attendance</span></div>
-            </div>
-
-            {summary.absentDays?.length > 0 && (
-              <>
-                <h3>Recent Absences</h3>
-                <div className="list">
-                  {summary.absentDays.slice(0, 5).map((a, i) => (
-                    <div key={i} className="history-row">
-                      <strong>{formatDate(a.date)}</strong>
-                      <span className="small muted">{a.reason}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
+          )}
+        </div>
+        <div style={{display: tab==='history' ? '' : 'none'}}>
+          <div className="row" style={{justifyContent: 'space-between'}}>
+            <h3>Full Attendance Record</h3>
+            {monthOptions.length > 0 && (
+              <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="sort-select">
+                <option value="">All months</option>
+                {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
             )}
           </div>
-        )}
-
-        {tab === 'history' && (
-          <div>
-            <div className="row" style={{justifyContent: 'space-between'}}>
-              <h3>Full Attendance Record</h3>
-              {monthOptions.length > 0 && (
-                <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="sort-select">
-                  <option value="">All months</option>
-                  {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              )}
-            </div>
-            <div className="list">
-              {filteredHistory.length === 0 && <p className="muted">No records for this period.</p>}
-              {filteredHistory.map(h => (
-                <div key={h._id} className="history-row">
-                  <div>
-                    <strong>{formatDate(h.date)}</strong>
-                    {h.status === 'present' ? (
-                      <span className="badge green small">
-                        <CheckCircle size={12} /> Present {h.inTime && `· ${h.inTime} - ${h.outTime || '?'}`}
-                      </span>
-                    ) : (
-                      <span className="badge red small"><XCircle size={12} /> Absent {h.reason && `· ${h.reason}`}</span>
-                    )}
-                  </div>
-                  {h.markedBy === 'teacher' && <span className="small muted">Marked by teacher</span>}
-                  {h.markedBy === 'self' && <span className="small muted">Self-marked</span>}
+          <div className="list">
+            {filteredHistory.length === 0 && <p className="muted">No records for this period.</p>}
+            {filteredHistory.map(h => (
+              <div key={h._id} className="history-row">
+                <div>
+                  <strong>{formatDate(h.date)}</strong>
+                  {h.status === 'present' ? (
+                    <span className="badge green small"><CheckCircle size={12} /> Present {h.inTime && `· ${h.inTime} - ${h.outTime || '?'}`}</span>
+                  ) : (
+                    <span className="badge red small"><XCircle size={12} /> Absent {h.reason && `· ${h.reason}`}</span>
+                  )}
                 </div>
-              ))}
-            </div>
+                {h.markedBy === 'teacher' && <span className="small muted">Marked by teacher</span>}
+                {h.markedBy === 'self' && <span className="small muted">Self-marked</span>}
+              </div>
+            ))}
           </div>
-        )}
-
-        {tab === 'fees' && (
-          <div>
-            <div className="row" style={{justifyContent: 'space-between'}}>
-              <h3><IndianRupee size={16} /> Fees</h3>
-              <input type="month" value={feesMonth} onChange={e => setFeesMonth(e.target.value)} className="sort-select" />
-            </div>
-            {!fees ? <p className="muted">Loading…</p> : (
-              <>
-                <div className="summary-stats">
-                  <div className="stat-big green"><strong>{formatRupee(fees.fees?.monthlyFee || 0)}</strong><span>This month</span></div>
-                  <div className="stat-big blue"><strong>{formatRupee(Math.round(fees.fees?.perDay || 0))}</strong><span>Per working day</span></div>
-                  <div className="stat-big"><strong>{fees.fees?.workingDays}/{fees.fees?.totalDays}</strong><span>Working days</span></div>
-                </div>
-                <div className="fee-row">
-                  <div className="fee-row-left">
-                    <div className="fee-row-name">{student?.name}</div>
-                    <div className="fee-row-meta">
-                      {fees.fees?.className && <span className="fee-pill fee-pill-class">{fees.fees.className}</span>}
-                      <span className="fee-pill">{fees.fees?.workingDays || 0}/{fees.fees?.totalDays || 0} working days</span>
-                    </div>
-                  </div>
-                  <div className="fee-row-amount">
-                    <div className="fee-row-month">{formatRupee(fees.fees?.monthlyFee || 0)}</div>
-                    <div className="fee-row-day">{formatRupee(Math.round(fees.fees?.perDay || 0))}/day</div>
-                  </div>
-                </div>
-                <p className="small muted" style={{ marginTop: 12 }}>
-                  Per-day fee = monthly fee ÷ working days. Holidays don't reduce the working-day count.
-                </p>
-              </>
-            )}
+        </div>
+        <div style={{display: tab==='fees' ? '' : 'none'}}>
+          <div className="row" style={{justifyContent: 'space-between'}}>
+            <h3><IndianRupee size={16} /> Fees</h3>
+            <input type="month" value={feesMonth} onChange={e => setFeesMonth(e.target.value)} className="sort-select" />
           </div>
-        )}
-
-        {tab === 'announcements' && <AnnouncementList announcements={announcements} info={info} />}
-        {tab === 'holidays' && <AnnouncementList announcements={announcements} info={info} />}
-        {tab === 'exams' && <div><h3><BookOpen size={16} /> Exams & Tests</h3><ExamList /></div>}
-        {tab === 'chat' && <ParentTeacherChat studentId={student._id} role="parent" currentName={student?.parentName || 'Parent'} />}
-        {tab === 'info' && <ClassInfo info={info} student={student} />}
+          {!fees ? <p className="muted">Loading…</p> : (
+            <>
+              <div className="summary-stats">
+                <div className="stat-big green"><strong>{formatRupee(fees.fees?.monthlyFee || 0)}</strong><span>This month</span></div>
+                <div className="stat-big blue"><strong>{formatRupee(Math.round(fees.fees?.perDay || 0))}</strong><span>Per working day</span></div>
+                <div className="stat-big"><strong>{fees.fees?.workingDays}/{fees.fees?.totalDays}</strong><span>Working days</span></div>
+              </div>
+              <div className="fee-row">
+                <div className="fee-row-left">
+                  <div className="fee-row-name">{student?.name}</div>
+                  <div className="fee-row-meta">
+                    {fees.fees?.className && <span className="fee-pill fee-pill-class">{fees.fees.className}</span>}
+                    <span className="fee-pill">{fees.fees?.workingDays || 0}/{fees.fees?.totalDays || 0} working days</span>
+                  </div>
+                </div>
+                <div className="fee-row-amount">
+                  <div className="fee-row-month">{formatRupee(fees.fees?.monthlyFee || 0)}</div>
+                  <div className="fee-row-day">{formatRupee(Math.round(fees.fees?.perDay || 0))}/day</div>
+                </div>
+              </div>
+              <p className="small muted" style={{ marginTop: 12 }}>Per-day fee = monthly fee ÷ working days.</p>
+            </>
+          )}
+        </div>
+        <div style={{display: tab==='announcements' || tab==='holidays' ? '' : 'none'}}><AnnouncementList announcements={announcements} info={info} /></div>
+        <div style={{display: tab==='exams' ? '' : 'none'}}><h3><BookOpen size={16} /> Exams & Tests</h3><ExamList /></div>
+        <div style={{display: tab==='chat' ? '' : 'none'}}><ParentTeacherChat studentId={student._id} role="parent" currentName={student?.parentName || 'Parent'} /></div>
+        <div style={{display: tab==='info' ? '' : 'none'}}><ClassInfo info={info} student={student} /></div>
       </main>
     </div>
   );
