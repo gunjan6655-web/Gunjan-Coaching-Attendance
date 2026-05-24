@@ -267,6 +267,12 @@ function Landing({ info, onSignIn, onRegister }) {
 
       <section className="info-section">
         <h2 className="display">Contact</h2>
+        {info.teacherPhoto && (
+          <div style={{ textAlign: 'center', marginBottom: 16 }}>
+            <img src={info.teacherPhoto} alt={info.teacherName || 'Teacher'} style={{ width: 80, height: 80, borderRadius: '50%', objectFit: 'cover', border: '3px solid #c2410c' }} />
+            {info.teacherName && <p className="small muted" style={{ marginTop: 6 }}>{info.teacherName}</p>}
+          </div>
+        )}
         <div className="info-grid">
           {info.teacherName && <div className="info-row"><User size={18} /><span>{info.teacherName}</span></div>}
           {info.phone && <div className="info-row"><Phone size={18} /><a href={`tel:${info.phone}`}>{info.phone}</a></div>}
@@ -450,16 +456,17 @@ function Register({ info, onBack, onDone }) {
             <label>Aadhar Number (optional) {aadharValid === true && <span className="badge green small"><Check size={12} /> valid</span>} {aadharValid === false && <span className="badge red small">invalid</span>}</label>
             <input value={form.aadhar} onChange={e => setForm({...form, aadhar: e.target.value.replace(/\D/g, '').slice(0, 12)})} placeholder="12-digit Aadhar" maxLength={12} inputMode="numeric" />
 
+            <label>Class / Standard</label>
+            <input
+              value={form.className}
+              onChange={e => setForm({...form, className: e.target.value})}
+              placeholder="e.g. 11th, 12th, B.Com, M.Com"
+              list="reg-class-suggestions"
+            />
             {(info.classes?.length || 0) > 0 && (
-              <>
-                <label>Class</label>
-                <select value={form.className} onChange={e => setForm({...form, className: e.target.value})}>
-                  <option value="">— Choose your class —</option>
-                  {info.classes.map(c => (
-                    <option key={c.name} value={c.name}>{c.name} (₹{(c.monthlyFee || 0).toLocaleString('en-IN')}/month)</option>
-                  ))}
-                </select>
-              </>
+              <datalist id="reg-class-suggestions">
+                {info.classes.map(c => <option key={c.name} value={c.name} />)}
+              </datalist>
             )}
 
             <label>Subjects you want to learn</label>
@@ -714,8 +721,6 @@ function TeacherDashboard({ info, announcements, onSignOut, refreshInfo }) {
         {tab === 'messages' && <ParentChatTab />}
         {tab === 'settings' && <SettingsTab info={info} refreshInfo={refreshInfo} />}
       </main>
-
-      <AIAssistant chatMode={tab === 'chat' || tab === 'messages'} />
     </div>
   );
 }
@@ -730,8 +735,8 @@ function StudentModePicker({ students, todayAtt, onCancel, onMarked }) {
   const [submitting, setSubmitting] = useState(false);
 
   const markedIds = new Set(todayAtt.map(a => String(a.studentId)));
-  const available = students.filter(s => !markedIds.has(String(s._id)));
-  const filtered = available.filter(s =>
+  // Show ALL students — teacher can re-mark if needed
+  const filtered = students.filter(s =>
     s.name.toLowerCase().includes(q.toLowerCase()) ||
     (s.rollNumber || '').includes(q)
   );
@@ -787,17 +792,21 @@ function StudentModePicker({ students, todayAtt, onCancel, onMarked }) {
         placeholder="Search by name or roll number..."
         autoFocus
       />
-      {available.length === 0 ? (
-        <p className="muted">Everyone has been marked today. ✨</p>
+      {students.length === 0 ? (
+        <p className="muted">No students added yet.</p>
       ) : (
         <div className="student-mode-list">
-          {filtered.map(s => (
-            <button key={s._id} className="student-mode-tile" onClick={() => setPicked(s)}>
-              {s.photo ? <img src={s.photo} alt="" className="tile-photo" /> : <div className="tile-photo placeholder"><User size={20} /></div>}
-              <strong>{s.name}</strong>
-              <span className="muted small">Roll #{s.rollNumber}</span>
-            </button>
-          ))}
+          {filtered.map(s => {
+            const alreadyMarked = markedIds.has(String(s._id));
+            return (
+              <button key={s._id} className={'student-mode-tile' + (alreadyMarked ? ' already-marked' : '')} onClick={() => setPicked(s)}>
+                {s.photo ? <img src={s.photo} alt="" className="tile-photo" /> : <div className="tile-photo placeholder"><User size={20} /></div>}
+                <strong>{s.name}</strong>
+                <span className="muted small">Roll #{s.rollNumber}</span>
+                {alreadyMarked && <span className="badge green small" style={{ marginTop: 2 }}>✓ Marked</span>}
+              </button>
+            );
+          })}
           {filtered.length === 0 && <p className="muted">No matches.</p>}
         </div>
       )}
@@ -835,28 +844,37 @@ function TodayTab({ info, announcements }) {
 
   const markPresent = async (id) => {
     try {
-      await api.post('/attendance/teacher-mark', { studentId: id, status: 'present' });
-      load();
+      const r = await api.post('/attendance/teacher-mark', { studentId: id, status: 'present' });
+      setTodayAtt(prev => {
+        const exists = prev.find(a => String(a.studentId) === String(id));
+        if (exists) return prev.map(a => String(a.studentId) === String(id) ? r.data : a);
+        return [...prev, r.data];
+      });
     } catch (err) { alert('Failed: ' + err.message); }
   };
 
   const markAbsent = async () => {
     try {
-      await api.post('/attendance/teacher-mark', {
+      const r = await api.post('/attendance/teacher-mark', {
         studentId: markingStudent._id,
         status: 'absent',
         reason: reason || 'No reason given'
       });
-      setMarkingStudent(null); setReason(''); load();
+      setTodayAtt(prev => {
+        const exists = prev.find(a => String(a.studentId) === String(markingStudent._id));
+        if (exists) return prev.map(a => String(a.studentId) === String(markingStudent._id) ? r.data : a);
+        return [...prev, r.data];
+      });
+      setMarkingStudent(null); setReason('');
     } catch (err) { alert('Failed: ' + err.message); }
   };
 
   // Feature #9: undo a "marked present by mistake" record
   const unmark = async (studentId) => {
-    if (!confirm('Roll back today\'s attendance for this student? It will go back to "not marked".')) return;
+    if (!confirm('Roll back today\'s attendance for this student?')) return;
     try {
       await api.delete('/attendance/unmark', { data: { studentId } });
-      load();
+      setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(studentId)));
     } catch (err) { alert('Failed: ' + err.message); }
   };
 
@@ -1048,11 +1066,13 @@ function StudentsTab({ info, refreshInfo }) {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(null);
   const [viewing, setViewing] = useState(null);
+  const [viewingPending, setViewingPending] = useState(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('name');
   const [batchFilter, setBatchFilter] = useState('');
   const [showCodeFor, setShowCodeFor] = useState(null);
+  const [enlargedPhoto, setEnlargedPhoto] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -1115,6 +1135,7 @@ function StudentsTab({ info, refreshInfo }) {
                   </div>
                 </div>
                 <div className="row-buttons">
+                  <button className="btn btn-outline btn-mini" onClick={() => setViewingPending(s)}><Eye size={14} /> View Details</button>
                   <button className="btn btn-green btn-mini" onClick={() => approve(s._id)}><Check size={14} /> Approve</button>
                   <button className="btn btn-outline btn-mini" onClick={() => reject(s._id)}><X size={14} /> Reject</button>
                 </div>
@@ -1160,7 +1181,9 @@ function StudentsTab({ info, refreshInfo }) {
           return (
             <div key={s._id} className="student-card">
               <div className="row" style={{ gap: 12, alignItems: 'flex-start', flex: 1, cursor: 'pointer' }} onClick={() => setViewing(s)}>
-                {s.photo ? <img src={s.photo} alt={s.name} className="student-avatar" /> : <div className="student-avatar placeholder"><User size={20} /></div>}
+                {s.photo
+                  ? <img src={s.photo} alt={s.name} className="student-avatar" onClick={e => { e.stopPropagation(); setEnlargedPhoto(s.photo); }} style={{ cursor: 'zoom-in' }} />
+                  : <div className="student-avatar placeholder"><User size={20} /></div>}
                 <div style={{ flex: 1 }}>
                   <strong>{s.name}</strong>
                   {isBirthdayToday(s.birthday) && <span className="bday-pill">🎂</span>}
@@ -1237,7 +1260,95 @@ function StudentsTab({ info, refreshInfo }) {
           </div>
         </Modal>
       )}
+
+      {enlargedPhoto && <PhotoViewer src={enlargedPhoto} onClose={() => setEnlargedPhoto(null)} />}
+
+      {viewingPending && (
+        <PendingStudentModal
+          student={viewingPending}
+          info={info}
+          onClose={() => setViewingPending(null)}
+          onApprove={() => { approve(viewingPending._id); setViewingPending(null); }}
+          onReject={() => { reject(viewingPending._id); setViewingPending(null); }}
+          onSaved={load}
+        />
+      )}
     </div>
+  );
+}
+
+// Modal for teacher to view pending student details + set fees before approving
+function PendingStudentModal({ student, info, onClose, onApprove, onReject, onSaved }) {
+  const [monthlyFee, setMonthlyFee] = useState(student.monthlyFee || 0);
+  const [feeDueDay, setFeeDueDay] = useState(student.feeDueDay || 5);
+  const [className, setClassName] = useState(student.className || '');
+  const [saving, setSaving] = useState(false);
+  const [enlargedPhoto, setEnlargedPhoto] = useState(null);
+
+  const saveAndApprove = async () => {
+    setSaving(true);
+    try {
+      await api.put('/students/' + student._id, { monthlyFee, feeDueDay, className });
+      onApprove();
+    } catch (e) {
+      alert('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setSaving(false); }
+  };
+
+  const age = ageFromDOB(student.birthday);
+
+  return (
+    <Modal onClose={onClose} title="Pending Registration — Review Details">
+      <div className="detail-modal">
+        {student.photo && (
+          <div style={{ textAlign: 'center', marginBottom: 16 }}>
+            <img src={student.photo} alt={student.name} className="detail-avatar" onClick={() => setEnlargedPhoto(student.photo)} style={{ cursor: 'zoom-in' }} />
+          </div>
+        )}
+        <h2 style={{ margin: '0 0 4px' }}>{student.name}</h2>
+        {age != null && <p className="muted small">Age {age}</p>}
+
+        <div className="info-card" style={{ marginTop: 12 }}>
+          <dl className="info-dl">
+            {student.phone && <><dt>Phone</dt><dd>{student.phone}</dd></>}
+            {student.email && <><dt>Email</dt><dd>{student.email}</dd></>}
+            {student.birthday && <><dt>Date of Birth</dt><dd>{student.birthday}</dd></>}
+            {student.parentName && <><dt>Parent Name</dt><dd>{student.parentName}</dd></>}
+            {student.parentPhone && <><dt>Parent Phone</dt><dd>{student.parentPhone}</dd></>}
+            {student.aadhar && <><dt>Aadhar</dt><dd>{student.aadhar}</dd></>}
+            {student.subjects?.length > 0 && <><dt>Subjects</dt><dd>{student.subjects.join(', ')}</dd></>}
+            {student.notes && <><dt>Notes</dt><dd>{student.notes}</dd></>}
+          </dl>
+        </div>
+
+        <div className="info-card" style={{ marginTop: 12 }}>
+          <h3 style={{ marginBottom: 12 }}>Set Before Approving</h3>
+          <label>Class / Standard</label>
+          <input value={className} onChange={e => setClassName(e.target.value)} placeholder="e.g. 11th, 12th, B.Com" list="pending-class-list" />
+          {(info.classes?.length || 0) > 0 && (
+            <datalist id="pending-class-list">
+              {info.classes.map(c => <option key={c.name} value={c.name} />)}
+            </datalist>
+          )}
+          <label style={{ marginTop: 10 }}>Monthly Fee (₹)</label>
+          <input type="number" min="0" value={monthlyFee} onChange={e => setMonthlyFee(Number(e.target.value) || 0)} placeholder="e.g. 1500" />
+          <label style={{ marginTop: 10 }}>Fee Due Day</label>
+          <select value={feeDueDay} onChange={e => setFeeDueDay(Number(e.target.value))}>
+            {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+              <option key={d} value={d}>{d}{d===1?'st':d===2?'nd':d===3?'rd':'th'} of every month</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="modal-buttons" style={{ marginTop: 16 }}>
+          <button className="btn btn-outline btn-mini" onClick={onReject}><X size={14} /> Reject</button>
+          <button className="btn btn-green" onClick={saveAndApprove} disabled={saving}>
+            <Check size={14} /> {saving ? 'Approving...' : 'Approve Student'}
+          </button>
+        </div>
+      </div>
+      {enlargedPhoto && <PhotoViewer src={enlargedPhoto} onClose={() => setEnlargedPhoto(null)} />}
+    </Modal>
   );
 }
 
@@ -1246,7 +1357,7 @@ function StudentForm({ info, student, onClose, onSaved, refreshInfo }) {
   useEffect(() => { if (refreshInfo) refreshInfo(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [form, setForm] = useState(student || {
-    name: '', phone: '', parentName: '', motherName: '', parentPhone: '',
+    name: '', phone: '', email: '', parentName: '', motherName: '', parentPhone: '',
     aadhar: '', birthday: '', subjects: [], notes: '', batchId: '', className: '', photo: '', monthlyFee: 0, feeDueDay: 5
   });
   const [error, setError] = useState('');
@@ -1287,7 +1398,8 @@ function StudentForm({ info, student, onClose, onSaved, refreshInfo }) {
       <input value={form.name} onChange={e => setForm({...form, name: e.target.value})} autoFocus />
       <label>Phone</label>
       <input value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} />
-      <label>Date of Birth {age != null && <span className="age-tag">Age {age}</span>}</label>
+      <label>Email</label>
+      <input type="email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} placeholder="student@email.com" /> {age != null && <span className="age-tag">Age {age}</span>}</label>
       <input type="date" value={form.birthday || ''} onChange={e => setForm({...form, birthday: e.target.value})} />
       <label>Parent / Father Name</label>
       <input value={form.parentName || ''} onChange={e => setForm({...form, parentName: e.target.value})} />
@@ -2080,6 +2192,12 @@ function SettingsTab({ info, refreshInfo }) {
   return (
     <div className="container-narrow">
       <h2 className="display">Coaching Center Settings</h2>
+
+      <h3 style={{ marginBottom: 8 }}><Camera size={16} /> My Profile Photo</h3>
+      <p className="small muted">Students and parents will see this photo in contact info.</p>
+      <PhotoCapture value={form.teacherPhoto || ''} onChange={(p) => setForm(f => ({ ...f, teacherPhoto: p }))} />
+
+      <hr />
       <label>Coaching Name</label>
       <input value={form.classroomName || ''} onChange={e => setForm({...form, classroomName: e.target.value})} />
       <label>Teacher Name</label>
@@ -2602,8 +2720,6 @@ function ParentDashboard({ student, info, announcements, onSignOut }) {
         {tab === 'chat' && <ParentTeacherChat studentId={student._id} role="parent" currentName={student?.parentName || 'Parent'} />}
         {tab === 'info' && <ClassInfo info={info} student={student} />}
       </main>
-
-      <AIAssistant chatMode={tab === 'chat'} />
     </div>
   );
 }
@@ -2650,11 +2766,23 @@ function AnnouncementList({ announcements, info }) {
 // ============================
 function ClassInfo({ info, student }) {
   const batch = student ? findBatch(info, student.batchId) : null;
+  const [showPhoto, setShowPhoto] = useState(false);
   return (
     <div className="container-narrow">
       <h2 className="display">{info.classroomName || 'Coaching Center'}</h2>
+      {info.teacherPhoto && (
+        <div style={{ textAlign: 'center', marginBottom: 16 }}>
+          <img
+            src={info.teacherPhoto}
+            alt={info.teacherName || 'Teacher'}
+            style={{ width: 96, height: 96, borderRadius: '50%', objectFit: 'cover', border: '3px solid #c2410c', cursor: 'zoom-in' }}
+            onClick={() => setShowPhoto(true)}
+          />
+          <p className="small muted" style={{ marginTop: 6 }}>{info.teacherName || 'Teacher'}</p>
+        </div>
+      )}
       <div className="info-grid">
-        {info.teacherName && <div className="info-row"><User size={18} /><span>Teacher: {info.teacherName}</span></div>}
+        {info.teacherName && !info.teacherPhoto && <div className="info-row"><User size={18} /><span>Teacher: {info.teacherName}</span></div>}
         {info.phone && (
           <div className="info-row">
             <Phone size={18} />
@@ -2674,6 +2802,7 @@ function ClassInfo({ info, student }) {
         )}
         {info.subjects?.length > 0 && <div className="info-row"><BookOpen size={18} /><span>Subjects: {info.subjects.map(getSubjectName).filter(Boolean).join(', ')}</span></div>}
       </div>
+      {showPhoto && info.teacherPhoto && <PhotoViewer src={info.teacherPhoto} onClose={() => setShowPhoto(false)} />}
     </div>
   );
 }
@@ -3159,7 +3288,7 @@ function StudentChatDashboard({ student, info, announcements, onSignOut }) {
         <button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}><MessageCircle size={14} /> Group Chat</button>
         <button className={tab === 'exams' ? 'active' : ''} onClick={() => setTab('exams')}><BookOpen size={14} /> Exams</button>
         <button className={tab === 'holidays' ? 'active' : ''} onClick={() => setTab('holidays')}><CalendarOff size={14} /> Holidays</button>
-        <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}><Sparkles size={14} /> AI Help</button>
+        <button className={tab === 'complaint' ? 'active' : ''} onClick={() => setTab('complaint')}><AlertCircle size={14} /> Talk to Teacher</button>
         <button className={tab === 'profile' ? 'active' : ''} onClick={() => setTab('profile')}><User size={14} /> My Profile</button>
       </nav>
 
@@ -3168,13 +3297,7 @@ function StudentChatDashboard({ student, info, announcements, onSignOut }) {
         {tab === 'chat' && <GroupChat role="student" currentName={student?.name} />}
         {tab === 'exams' && <div className="container-narrow"><h3><BookOpen size={16} /> Exams & Tests</h3><ExamList /></div>}
         {tab === 'holidays' && <div className="container-narrow"><h3><CalendarOff size={16} /> Holidays & Announcements</h3><AnnouncementList announcements={announcements || []} info={info} /></div>}
-        {tab === 'ai' && (
-          <div className="container-narrow">
-            <h3><Sparkles size={16} /> AI Help</h3>
-            <p className="small muted">Ask anything. The assistant knows about your attendance, fees, and class — but not about other students.</p>
-            <AIAssistantInline />
-          </div>
-        )}
+        {tab === 'complaint' && <div className="container-narrow"><ComplaintCompose /></div>}
         {tab === 'profile' && (
           <div>
             <StudentProfilePhoto student={student} />
