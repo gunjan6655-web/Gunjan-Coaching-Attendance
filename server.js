@@ -184,11 +184,13 @@ const ChatMessageSchema = new mongoose.Schema({
   studentId: { type: mongoose.Schema.Types.ObjectId },
   name: { type: String, required: true },
   rollNumber: String,
-  photo: String, // sender's profile photo (base64) stored at send time
+  photo: String,
   text: { type: String, default: '' },
-  messageType: { type: String, enum: ['text', 'image', 'location', 'emoji'], default: 'text' },
-  image: String, // base64 compressed image for image messages
-  locationData: { lat: Number, lng: Number, address: String }, // for location messages
+  messageType: { type: String, enum: ['text', 'image', 'location', 'audio', 'contact'], default: 'text' },
+  image: String,
+  audio: String, // base64 webm audio (max ~30s)
+  locationData: { lat: Number, lng: Number, address: String, isLive: Boolean },
+  contactData: { name: String, phone: String },
   createdAt: { type: Date, default: Date.now, index: true },
 });
 
@@ -1237,42 +1239,38 @@ app.get('/api/chat/messages', authenticate, async (req, res) => {
 app.post('/api/chat/messages', authenticate, async (req, res) => {
   try {
     if (!['teacher', 'student'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
-    const { text, messageType, image, locationData } = req.body;
+    const { text, messageType, image, locationData, audio, contactData } = req.body;
     const mType = messageType || 'text';
 
-    // Validate content based on type
     if (mType === 'text' && !(text || '').trim()) return res.status(400).json({ error: 'Empty message' });
     if (mType === 'image' && !image) return res.status(400).json({ error: 'Image required' });
+    if (mType === 'audio' && !audio) return res.status(400).json({ error: 'Audio required' });
     if (mType === 'location' && !locationData) return res.status(400).json({ error: 'Location required' });
+    if (mType === 'contact' && !contactData) return res.status(400).json({ error: 'Contact required' });
     if ((text || '').length > 1000) return res.status(400).json({ error: 'Too long (max 1000 chars)' });
-    // Limit image size to ~300KB base64
-    if (image && image.length > 400000) return res.status(413).json({ error: 'Image too large. Please use a smaller image.' });
+    if (image && image.length > 400000) return res.status(413).json({ error: 'Image too large. Max ~300KB.' });
+    if (audio && audio.length > 800000) return res.status(413).json({ error: 'Voice note too large. Keep under 30 seconds.' });
 
-    let name = 'Teacher';
-    let rollNumber = '';
-    let studentId = null;
-    let senderPhoto = '';
+    let name = 'Teacher', rollNumber = '', studentId = null, senderPhoto = '';
     if (req.user.role === 'student') {
       const s = await Student.findById(req.user.studentId).select('name rollNumber photo');
       if (!s) return res.status(404).json({ error: 'Student not found' });
       name = s.name; rollNumber = s.rollNumber; studentId = req.user.studentId; senderPhoto = s.photo || '';
     } else {
       const cfg = await Config.findOne().select('teacherName teacherPhoto');
-      name = cfg?.teacherName || 'Teacher';
-      senderPhoto = cfg?.teacherPhoto || '';
+      name = cfg?.teacherName || 'Teacher'; senderPhoto = cfg?.teacherPhoto || '';
     }
     const msg = new ChatMessage({
       role: req.user.role, studentId, name, rollNumber, photo: senderPhoto,
-      text: (text || '').trim(),
-      messageType: mType,
+      text: (text || '').trim(), messageType: mType,
       image: mType === 'image' ? image : undefined,
+      audio: mType === 'audio' ? audio : undefined,
       locationData: mType === 'location' ? locationData : undefined,
+      contactData: mType === 'contact' ? contactData : undefined,
     });
     await msg.save();
     res.json({ ok: true, message: msg });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Delete all attendance records for a specific month (teacher only)
@@ -1297,6 +1295,24 @@ app.delete('/api/fees/month/:month', authenticate, teacherOnly, async (req, res)
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// All attendance for a specific month (for export)
+app.get('/api/attendance/export', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const month = req.query.month || istDateISO().substring(0, 7);
+    const records = await Attendance.find({ date: { $regex: '^' + month } }).lean();
+    const students = await Student.find({ pendingApproval: { $ne: true } }).select('name rollNumber className').lean();
+    const studentMap = {};
+    students.forEach(s => { studentMap[String(s._id)] = s; });
+    const enriched = records.map(r => ({
+      ...r,
+      studentName: studentMap[String(r.studentId)]?.name || 'Unknown',
+      rollNumber: studentMap[String(r.studentId)]?.rollNumber || '',
+      className: studentMap[String(r.studentId)]?.className || '',
+    }));
+    res.json({ month, records: enriched, students });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Get list of months that have attendance data
