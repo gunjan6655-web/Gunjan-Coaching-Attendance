@@ -73,9 +73,8 @@ const BatchSchema = new mongoose.Schema({
 
 const ConfigSchema = new mongoose.Schema({
   teacherPassword: String,
-  // studentPassword removed - students mark themselves on the teacher's device
-  // parentPassword removed - parents log in with their unique 6-char code
   teacherName: String,
+  teacherPhoto: String,  // base64 profile photo for teacher
   phone: String,
   email: String,
   classroomName: String,
@@ -92,6 +91,7 @@ const StudentSchema = new mongoose.Schema({
   name: { type: String, required: true },
   rollNumber: { type: String, index: true },
   phone: String,
+  email: String,
   parentName: String,    // father / primary guardian
   motherName: String,    // mother / second guardian
   parentPhone: String,
