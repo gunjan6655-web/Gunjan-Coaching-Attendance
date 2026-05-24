@@ -1399,7 +1399,8 @@ function StudentForm({ info, student, onClose, onSaved, refreshInfo }) {
       <label>Phone</label>
       <input value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} />
       <label>Email</label>
-      <input type="email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} placeholder="student@email.com" /> {age != null && <span className="age-tag">Age {age}</span>}</label>
+      <input type="email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} placeholder="student@email.com" />
+      <label>Date of Birth {age != null && <span className="age-tag">Age {age}</span>}</label>
       <input type="date" value={form.birthday || ''} onChange={e => setForm({...form, birthday: e.target.value})} />
       <label>Parent / Father Name</label>
       <input value={form.parentName || ''} onChange={e => setForm({...form, parentName: e.target.value})} />
