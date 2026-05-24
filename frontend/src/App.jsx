@@ -8,9 +8,11 @@ import {
   Megaphone, Eye, EyeOff, BookOpen, Settings,
   Cake, Share2, MessageCircle, CalendarDays, Copy,
   Wallet, RotateCcw, KeyRound, IndianRupee, Layers,
-  Camera, Sparkles, RefreshCw, AlertCircle, Inbox, Hash, Check
+  Camera, Sparkles, RefreshCw, AlertCircle, Inbox, Hash, Check,
+  Mic, MicOff, Video, UserCheck, Navigation, Download, FileSpreadsheet, Paperclip
 } from 'lucide-react';
 import axios from 'axios';
+import * as XLSX from 'xlsx';
 import './index.css';
 
 // ============================
@@ -658,6 +660,63 @@ function PickStudent({ students, role, onPick, onBack }) {
   );
 }
 
+// Location sharing modal for chat — current, live, or paste link
+function LocationChatModal({ onSend, onClose }) {
+  const [loading, setLoading] = useState(false);
+  const [pasteUrl, setPasteUrl] = useState('');
+  const [err, setErr] = useState('');
+
+  const sendCurrent = () => {
+    if (!navigator.geolocation) { setErr('Geolocation not supported.'); return; }
+    setLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      pos => { onSend({ lat: pos.coords.lat || pos.coords.latitude, lng: pos.coords.lng || pos.coords.longitude, address: 'Current Location', isLive: false }); setLoading(false); },
+      () => { setErr('Could not get location. Try pasting a link.'); setLoading(false); }
+    );
+  };
+
+  const sendLive = () => {
+    if (!navigator.geolocation) { setErr('Geolocation not supported.'); return; }
+    setLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      pos => { onSend({ lat: pos.coords.latitude, lng: pos.coords.longitude, address: 'Live Location', isLive: true }); setLoading(false); },
+      () => { setErr('Could not get location.'); setLoading(false); }
+    );
+  };
+
+  const sendPasted = () => {
+    // Extract lat/lng from Google Maps URL if possible
+    const latLng = pasteUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (latLng) {
+      onSend({ lat: parseFloat(latLng[1]), lng: parseFloat(latLng[2]), address: 'Shared Location', isLive: false });
+    } else {
+      onSend({ lat: 0, lng: 0, address: pasteUrl, isLive: false });
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} title="Share Location">
+      {err && <div className="error-box small">{err}</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <button className="btn btn-primary" onClick={sendCurrent} disabled={loading}>
+          <MapPin size={16} /> {loading ? 'Getting location…' : 'Send Current Location (GPS)'}
+        </button>
+        <button className="btn btn-outline" onClick={sendLive} disabled={loading}>
+          <Navigation size={16} /> Send Live Location (updates when refreshed)
+        </button>
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+          <label>Or paste a Google Maps link</label>
+          <div className="row" style={{ gap: 8 }}>
+            <input value={pasteUrl} onChange={e => setPasteUrl(e.target.value)} placeholder="https://maps.google.com/..." style={{ flex: 1 }} />
+            <button className="btn btn-primary btn-mini" onClick={sendPasted} disabled={!pasteUrl}><Send size={14} /></button>
+          </div>
+          <p className="small muted" style={{ marginTop: 4 }}>Open Google Maps → find location → tap Share → Copy link → paste here</p>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // LazyTab: only mounts when first visited, then keeps alive (hidden) to preserve state
 function LazyTab({ active, children }) {
   const [everActive, setEverActive] = useState(false);
@@ -972,6 +1031,8 @@ function TodayTab({ info, announcements }) {
 
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const visibleAtt = todayAtt.filter(a => visible.some(s => String(s._id) === String(a.studentId)));
+  const presentCount = visibleAtt.filter(a => a.status === 'present').length;
+  const absentCount = visibleAtt.filter(a => a.status === 'absent').length;
 
   return (
     <div>
@@ -1009,9 +1070,10 @@ function TodayTab({ info, announcements }) {
 
       <div className="stat-row">
         <div className="stat"><strong>{today}</strong></div>
-        <div className="stat green"><CheckCircle size={20} /> {visibleAtt.filter(a => a.status === 'present').length} Present</div>
-        <div className="stat red"><XCircle size={20} /> {visibleAtt.filter(a => a.status === 'absent').length} Absent</div>
+        <div className="stat green"><CheckCircle size={20} /> {presentCount} Present</div>
+        <div className="stat red"><XCircle size={20} /> {absentCount} Absent</div>
         <div className="stat muted"><Info size={20} /> {visible.length - visibleAtt.length} Not marked</div>
+        <div className="stat blue"><Users size={20} /> {visible.length} Total</div>
       </div>
 
       <div className="toolbar">
@@ -1043,14 +1105,19 @@ function TodayTab({ info, announcements }) {
           const batch = findBatch(info, s.batchId);
           return (
             <div key={s._id} className="attendance-card">
-              <div>
-                <strong>{s.name}</strong>
-                {isBirthdayToday(s.birthday) && <span className="bday-pill">🎂 Birthday!</span>}
-                <p className="muted small">
-                  Roll #{s.rollNumber}
-                  {batch ? ` · ${batch.name} (${batch.startTime}-${batch.endTime})` : ''}
-                  {s.subjects?.length ? ' · ' + s.subjects.join(', ') : ''}
-                </p>
+              <div className="row" style={{ gap: 10, alignItems: 'center', flex: 1 }}>
+                {s.photo
+                  ? <img src={s.photo} alt={s.name} className="att-avatar" />
+                  : <div className="att-avatar placeholder"><User size={16} /></div>}
+                <div>
+                  <strong>{s.name}</strong>
+                  {isBirthdayToday(s.birthday) && <span className="bday-pill">🎂 Birthday!</span>}
+                  <p className="muted small">
+                    Roll #{s.rollNumber}
+                    {batch ? ` · ${batch.name}` : ''}
+                    {s.className ? ` · ${s.className}` : ''}
+                  </p>
+                </div>
               </div>
               <div className="attendance-status">
                 {att ? (
@@ -1216,6 +1283,7 @@ function StudentsTab({ info, refreshInfo }) {
         <button className="btn btn-primary" onClick={() => setAdding(true)}>
           <Plus size={16} /> Add Student
         </button>
+        <span className="student-count-badge">{filtered.length} student{filtered.length !== 1 ? 's' : ''}</span>
       </div>
 
       {filtered.length === 0 && (
@@ -2383,42 +2451,66 @@ function SettingsTab({ info, refreshInfo }) {
 function LocationPicker({ value, onChange }) {
   const [locating, setLocating] = useState(false);
   const [err, setErr] = useState('');
+  const [previous, setPrevious] = useState('');
 
   const useGPS = () => {
     setErr('');
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      pos => {
         const { latitude, longitude } = pos.coords;
         const url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        setPrevious(value);
         onChange(url);
         setLocating(false);
       },
-      () => { setErr('Could not get location. Please type the URL manually.'); setLocating(false); }
+      () => { setErr("Couldn't get GPS. Paste a Google Maps link manually."); setLocating(false); }
     );
   };
 
+  const undo = () => { onChange(previous); setPrevious(''); };
+
+  // Extract embed-friendly URL from share link
+  const previewSrc = value?.includes('google.com/maps')
+    ? value.replace('https://www.google.com/maps', 'https://maps.google.com/maps').replace('/maps?', '/maps?output=embed&')
+    : null;
+
   return (
     <div>
-      <div className="row" style={{ gap: 8 }}>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         <input
           value={value}
-          onChange={e => onChange(e.target.value)}
-          placeholder="Paste Google Maps link, or tap GPS below"
-          style={{ flex: 1 }}
+          onChange={e => { setPrevious(value); onChange(e.target.value); }}
+          placeholder="Paste Google Maps link, or tap GPS button"
+          style={{ flex: 1, minWidth: 200 }}
         />
         <button type="button" className="btn btn-outline btn-mini" onClick={useGPS} disabled={locating}>
-          <MapPin size={14} /> {locating ? 'Finding...' : 'Use My GPS'}
+          <MapPin size={14} /> {locating ? 'Finding…' : 'Use My GPS'}
         </button>
+        {previous && (
+          <button type="button" className="btn btn-outline btn-mini" onClick={undo} title="Undo last change" style={{ color: '#d97706' }}>
+            <RotateCcw size={14} /> Undo
+          </button>
+        )}
+        {value && (
+          <button type="button" className="btn btn-outline btn-mini" onClick={() => { setPrevious(value); onChange(''); }} style={{ color: '#ef4444' }}>
+            <X size={14} /> Clear
+          </button>
+        )}
       </div>
       {err && <p className="small" style={{ color: '#ef4444', marginTop: 4 }}>{err}</p>}
       {value && (
         <a href={value} target="_blank" rel="noreferrer" className="small" style={{ color: '#0a84ff', display: 'block', marginTop: 4 }}>
-          ↗ Preview location on map
+          ↗ Preview location
         </a>
       )}
-      <p className="small muted" style={{ marginTop: 4 }}>
-        Or open <a href="https://maps.google.com" target="_blank" rel="noreferrer">Google Maps</a>, find your location, tap Share → Copy link, and paste it above.
+      {previewSrc && (
+        <div style={{ marginTop: 8, borderRadius: 10, overflow: 'hidden', border: '1px solid #e5e7eb' }}>
+          <iframe src={previewSrc} width="100%" height="180" style={{ border: 0, display: 'block' }} title="Map preview" loading="lazy" />
+        </div>
+      )}
+      <p className="small muted" style={{ marginTop: 6 }}>
+        To pick manually: open <a href="https://maps.google.com" target="_blank" rel="noreferrer">Google Maps</a> → find your location → tap Share → Copy link → paste above.
       </p>
     </div>
   );
@@ -2429,61 +2521,144 @@ function MonthlyDataManager() {
   const [months, setMonths] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
+  const [previewing, setPreviewing] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
-    try {
-      const r = await api.get('/attendance/months');
-      setMonths(r.data.months || []);
-    } catch { } finally { setLoading(false); }
+    try { const r = await api.get('/attendance/months'); setMonths(r.data.months || []); }
+    catch {} finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
 
+  const loadPreview = async (month) => {
+    setPreviewing(month); setPreviewLoading(true);
+    try {
+      const [attR, feeR, studR] = await Promise.all([
+        api.get('/attendance/export', { params: { month } }),
+        api.get('/fees/paid', { params: { month } }),
+        api.get('/students'),
+      ]);
+      setPreviewData({ month, attendance: attR.data.records, paid: feeR.data.paid, students: studR.data });
+    } catch {} finally { setPreviewLoading(false); }
+  };
+
+  const downloadExcel = () => {
+    if (!previewData) return;
+    const wb = XLSX.utils.book_new();
+
+    // Students sheet
+    const studRows = previewData.students.map(s => ({
+      'Roll #': s.rollNumber, 'Name': s.name, 'Class': s.className || '',
+      'Phone': s.phone || '', 'Parent': s.parentName || '', 'Parent Phone': s.parentPhone || '',
+      'Monthly Fee': s.monthlyFee || 0,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(studRows), 'Students');
+
+    // Attendance sheet
+    const attRows = previewData.attendance.map(r => ({
+      'Date': r.date, 'Name': r.studentName, 'Roll #': r.rollNumber,
+      'Class': r.className, 'Status': r.status,
+      'In Time': r.inTime || '', 'Out Time': r.outTime || '',
+      'Marked By': r.markedBy, 'Reason': r.reason || '',
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attRows), `Attendance ${previewData.month}`);
+
+    // Fees paid sheet
+    const feeRows = previewData.paid.map(s => ({
+      'Name': s.name, 'Roll #': s.rollNumber, 'Class': s.className || '',
+      'Amount Paid': s.paidAmount || s.monthlyFee || 0,
+      'Paid On': s.paidOn ? new Date(s.paidOn).toLocaleDateString('en-IN') : '',
+      'Note': s.note || '',
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(feeRows), `Fees Paid ${previewData.month}`);
+
+    XLSX.writeFile(wb, `GunjanCoaching_${previewData.month}.xlsx`);
+  };
+
+  const downloadCSV = (type) => {
+    if (!previewData) return;
+    let rows, filename;
+    if (type === 'attendance') {
+      rows = previewData.attendance.map(r =>
+        [r.date, r.studentName, r.rollNumber, r.className, r.status, r.inTime || '', r.outTime || '', r.reason || ''].join(',')
+      );
+      rows.unshift('Date,Name,Roll #,Class,Status,In Time,Out Time,Reason');
+      filename = `Attendance_${previewData.month}.csv`;
+    } else {
+      rows = previewData.paid.map(s =>
+        [s.name, s.rollNumber, s.className || '', s.paidAmount || s.monthlyFee || 0, s.paidOn ? new Date(s.paidOn).toLocaleDateString('en-IN') : ''].join(',')
+      );
+      rows.unshift('Name,Roll #,Class,Amount,Paid On');
+      filename = `FeesPaid_${previewData.month}.csv`;
+    }
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  };
+
   const deleteMonth = async (month, type) => {
-    if (!confirm(`Delete all ${type} records for ${month}? This cannot be undone!`)) return;
+    if (!confirm(`Delete all ${type} records for ${month}? Cannot be undone!`)) return;
     setDeleting(month + type);
     try {
       const endpoint = type === 'attendance' ? `/attendance/month/${month}` : `/fees/month/${month}`;
       const r = await api.delete(endpoint);
-      alert(`Deleted ${r.data.deleted} ${type} records for ${month}.`);
-      if (type === 'attendance') load();
-    } catch (e) {
-      alert('Failed: ' + (e.response?.data?.error || e.message));
-    } finally { setDeleting(null); }
+      alert(`Deleted ${r.data.deleted} records.`);
+      if (type === 'attendance') { load(); if (previewing === month) { setPreviewing(null); setPreviewData(null); } }
+    } catch (e) { alert('Failed: ' + (e.response?.data?.error || e.message)); }
+    finally { setDeleting(null); }
   };
 
   if (loading) return <p className="muted small">Loading data history…</p>;
 
   return (
     <div>
-      <h3 style={{ marginBottom: 8 }}>📊 Monthly Data Management</h3>
-      <p className="small muted">Delete old month data to free up storage space. <strong>This cannot be undone.</strong></p>
-      {months.length === 0 ? (
-        <p className="small muted">No attendance records found.</p>
-      ) : (
-        <div className="list" style={{ marginTop: 8 }}>
+      <h3 style={{ marginBottom: 4 }}>📊 Monthly Data Management</h3>
+      <p className="small muted" style={{ marginBottom: 12 }}>View, download, or delete old monthly data to free storage.</p>
+      {months.length === 0 ? <p className="small muted">No attendance records yet.</p> : (
+        <div className="list">
           {months.map(m => (
-            <div key={m} className="history-row" style={{ alignItems: 'center' }}>
-              <strong>{m}</strong>
-              <div className="row" style={{ gap: 6 }}>
-                <button
-                  className="btn btn-outline btn-mini"
-                  onClick={() => deleteMonth(m, 'attendance')}
-                  disabled={!!deleting}
-                  style={{ color: '#ef4444', borderColor: '#ef4444' }}
-                >
-                  <Trash2 size={12} /> {deleting === m + 'attendance' ? 'Deleting…' : 'Delete Attendance'}
-                </button>
-                <button
-                  className="btn btn-outline btn-mini"
-                  onClick={() => deleteMonth(m, 'fees')}
-                  disabled={!!deleting}
-                  style={{ color: '#d97706', borderColor: '#d97706' }}
-                >
-                  <Trash2 size={12} /> {deleting === m + 'fees' ? 'Deleting…' : 'Delete Fee Records'}
-                </button>
+            <div key={m}>
+              <div className="history-row" style={{ alignItems: 'center' }}>
+                <strong style={{ cursor: 'pointer', color: '#0a84ff' }} onClick={() => previewing === m ? setPreviewing(null) : loadPreview(m)}>
+                  {m} {previewing === m ? '▲' : '▼'}
+                </strong>
+                <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                  <button className="btn btn-outline btn-mini" onClick={() => previewing === m ? setPreviewing(null) : loadPreview(m)}>
+                    <Eye size={12} /> {previewing === m ? 'Hide' : 'View'}
+                  </button>
+                  <button className="btn btn-outline btn-mini" onClick={() => deleteMonth(m, 'attendance')} disabled={!!deleting} style={{ color: '#ef4444', borderColor: '#ef4444' }}>
+                    <Trash2 size={12} /> Attendance
+                  </button>
+                  <button className="btn btn-outline btn-mini" onClick={() => deleteMonth(m, 'fees')} disabled={!!deleting} style={{ color: '#d97706', borderColor: '#d97706' }}>
+                    <Trash2 size={12} /> Fee Records
+                  </button>
+                </div>
               </div>
+              {previewing === m && (
+                <div style={{ background: '#f9f7f4', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                  {previewLoading ? <p className="muted small">Loading preview…</p> : previewData ? (
+                    <>
+                      <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                        <strong>{previewData.attendance.length} attendance records · {previewData.paid.length} paid fees</strong>
+                        <button className="btn btn-green btn-mini" onClick={downloadExcel}><FileSpreadsheet size={12} /> Download Excel (all sheets)</button>
+                        <button className="btn btn-outline btn-mini" onClick={() => downloadCSV('attendance')}><Download size={12} /> Attendance CSV</button>
+                        <button className="btn btn-outline btn-mini" onClick={() => downloadCSV('fees')}><Download size={12} /> Fees CSV</button>
+                      </div>
+                      <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: 13 }}>
+                        <strong>Attendance sample:</strong>
+                        {previewData.attendance.slice(0, 10).map(r => (
+                          <div key={r._id} style={{ padding: '3px 0', borderBottom: '1px solid #eee' }}>
+                            {r.date} — <strong>{r.studentName}</strong> — <span style={{ color: r.status === 'present' ? '#16a34a' : '#ef4444' }}>{r.status}</span>
+                          </div>
+                        ))}
+                        {previewData.attendance.length > 10 && <p className="small muted">…and {previewData.attendance.length - 10} more</p>}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -3135,7 +3310,17 @@ function GroupChat({ role, currentName, info }) {
   const [profileFor, setProfileFor] = useState(null);
   const [showTeacherProfile, setShowTeacherProfile] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showMediaMenu, setShowMediaMenu] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [showContactForm, setShowContactForm] = useState(false);
+  const [contactName, setContactName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
   const imageRef = useRef(null);
+  const cameraRef = useRef(null);
+  const recorderRef = useRef(null);
+  const recTimerRef = useRef(null);
   const scrollRef = useRef(null);
   const lastTsRef = useRef(null);
 
@@ -3178,11 +3363,9 @@ function GroupChat({ role, currentName, info }) {
       const r = await api.post('/chat/messages', { text, messageType: 'text' });
       setMessages(m => [...m, r.data.message]);
       lastTsRef.current = r.data.message.createdAt;
-      setInput('');
-      setShowEmoji(false);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to send');
-    } finally { setSending(false); }
+      setInput(''); setShowEmoji(false); setShowMediaMenu(false);
+    } catch (err) { setError(err.response?.data?.error || 'Failed to send'); }
+    finally { setSending(false); }
   };
 
   const sendImage = async (file) => {
@@ -3190,18 +3373,16 @@ function GroupChat({ role, currentName, info }) {
     if (file.size > 5 * 1024 * 1024) { alert('Image too large. Max 5MB.'); return; }
     setSending(true);
     try {
-      // Compress to max 400x400
-      const image = await new Promise((resolve) => {
+      const image = await new Promise(resolve => {
         const reader = new FileReader();
         reader.onload = () => {
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            const max = 400;
-            const ratio = Math.min(max / img.width, max / img.height, 1);
+            const max = 600; const ratio = Math.min(max / img.width, max / img.height, 1);
             canvas.width = img.width * ratio; canvas.height = img.height * ratio;
             canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-            resolve(canvas.toDataURL('image/jpeg', 0.6));
+            resolve(canvas.toDataURL('image/jpeg', 0.65));
           };
           img.src = reader.result;
         };
@@ -3210,26 +3391,76 @@ function GroupChat({ role, currentName, info }) {
       const r = await api.post('/chat/messages', { text: '', messageType: 'image', image });
       setMessages(m => [...m, r.data.message]);
       lastTsRef.current = r.data.message.createdAt;
-    } catch (err) { setError(err.response?.data?.error || 'Failed to send image'); }
+    } catch (err) { setError(err.response?.data?.error || 'Failed'); }
     finally { setSending(false); }
   };
 
-  const sendLocation = () => {
-    if (!navigator.geolocation) { alert('Geolocation not supported on this device.'); return; }
+  const sendLocationMsg = async (locationData) => {
     setSending(true);
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const { latitude: lat, longitude: lng } = pos.coords;
-      try {
-        const r = await api.post('/chat/messages', {
-          text: `📍 Location shared`,
-          messageType: 'location',
-          locationData: { lat, lng, address: `${lat.toFixed(5)}, ${lng.toFixed(5)}` }
-        });
-        setMessages(m => [...m, r.data.message]);
-        lastTsRef.current = r.data.message.createdAt;
-      } catch (err) { setError('Failed to send location'); }
-      finally { setSending(false); }
-    }, () => { alert('Could not get location.'); setSending(false); });
+    try {
+      const r = await api.post('/chat/messages', { text: '📍 Location', messageType: 'location', locationData });
+      setMessages(m => [...m, r.data.message]);
+      lastTsRef.current = r.data.message.createdAt;
+    } catch (err) { setError('Failed to send location'); }
+    finally { setSending(false); }
+  };
+
+  const sendContact = async () => {
+    setSending(true);
+    try {
+      const r = await api.post('/chat/messages', {
+        text: `👤 ${contactName}`,
+        messageType: 'contact',
+        contactData: { name: contactName, phone: contactPhone }
+      });
+      setMessages(m => [...m, r.data.message]);
+      lastTsRef.current = r.data.message.createdAt;
+      setContactName(''); setContactPhone('');
+    } catch (err) { setError('Failed'); }
+    finally { setSending(false); }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        clearInterval(recTimerRef.current);
+        setIsRecording(false); setRecSeconds(0);
+        const blob = new Blob(chunks, { type: mimeType });
+        if (blob.size > 800000) { alert('Voice note too large. Max ~60 seconds.'); return; }
+        const reader = new FileReader();
+        reader.onload = async () => {
+          setSending(true);
+          try {
+            const r = await api.post('/chat/messages', { text: '🎤 Voice message', messageType: 'audio', audio: reader.result });
+            setMessages(m => [...m, r.data.message]);
+            lastTsRef.current = r.data.message.createdAt;
+          } catch (err) { setError('Failed to send voice note'); }
+          finally { setSending(false); }
+        };
+        reader.readAsDataURL(blob);
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+      setIsRecording(true); setRecSeconds(0);
+      recTimerRef.current = setInterval(() => setRecSeconds(s => {
+        if (s >= 59) { recorder.stop(); return 0; }
+        return s + 1;
+      }), 1000);
+    } catch { alert('Microphone not accessible.'); }
+  };
+
+  const stopRecording = () => { recorderRef.current?.stop(); };
+  const cancelRecording = () => {
+    clearInterval(recTimerRef.current);
+    recorderRef.current?.stream?.getTracks().forEach(t => t.stop());
+    recorderRef.current = null;
+    setIsRecording(false); setRecSeconds(0);
   };
 
   const deleteMsg = async (id) => {
@@ -3285,10 +3516,23 @@ function GroupChat({ role, currentName, info }) {
                   )}
                 </div>
                 {m.messageType === 'image' && m.image ? (
-                  <img src={m.image} alt="shared" style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, marginTop: 4, cursor: 'pointer' }} onClick={() => window.open(m.image)} />
+                  <img src={m.image} alt="shared" style={{ maxWidth: '100%', maxHeight: 240, borderRadius: 8, marginTop: 4, cursor: 'pointer' }} onClick={() => window.open(m.image)} />
+                ) : m.messageType === 'audio' && m.audio ? (
+                  <audio controls src={m.audio} style={{ width: '100%', maxWidth: 280, marginTop: 4 }} />
+                ) : m.messageType === 'contact' && m.contactData ? (
+                  <div className="chat-contact-card">
+                    <User size={20} />
+                    <div>
+                      <strong>{m.contactData.name}</strong>
+                      {m.contactData.phone && <p className="small">{m.contactData.phone}</p>}
+                    </div>
+                    {m.contactData.phone && (
+                      <a href={`tel:${m.contactData.phone}`} className="btn btn-outline btn-mini">Call</a>
+                    )}
+                  </div>
                 ) : m.messageType === 'location' && m.locationData ? (
                   <a href={`https://www.google.com/maps?q=${m.locationData.lat},${m.locationData.lng}`} target="_blank" rel="noreferrer" className="chat-location-link">
-                    📍 View Location on Map
+                    📍 {m.locationData.isLive ? 'Live Location' : 'View Location on Map'}
                   </a>
                 ) : (
                   <div className="chat-text">{m.text}</div>
@@ -3310,16 +3554,70 @@ function GroupChat({ role, currentName, info }) {
       {error && <div className="error-box small">{error}</div>}
       {showEmoji && (
         <div className="emoji-picker">
-          {['😀','😂','😊','😍','🥰','😎','👍','❤️','🙏','🎉','🔥','✅','👏','😢','😮','🤔','💯','🌟','📚','✏️','🏆','💪','🤝','📞','🙂','😅','😇','🥳','💐','🎂'].map(e => (
+          {['😀','😂','😊','😍','🥰','😎','😅','😇','🥳','😢','😮','🤔','😤','🤩','🥺',
+            '👍','👎','❤️','🙏','🎉','🔥','✅','👏','💯','🌟','📚','✏️','🏆','💪','🤝',
+            '📞','💐','🎂','🍕','🎵','⚽','🌈','💡','📝','🙂','😁','🤣','😉','😘','🥹'].map(e => (
             <button key={e} className="emoji-btn" onClick={() => { setInput(prev => prev + e); setShowEmoji(false); }}>{e}</button>
           ))}
         </div>
       )}
+      {showMediaMenu && (
+        <div className="media-menu">
+          <input ref={imageRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { sendImage(e.target.files?.[0], false); e.target.value = ''; setShowMediaMenu(false); }} />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { sendImage(e.target.files?.[0], false); e.target.value = ''; setShowMediaMenu(false); }} />
+          <button className="media-menu-btn" onClick={() => { imageRef.current?.click(); }}>
+            <span className="media-menu-icon" style={{ background: '#7c3aed' }}>📷</span>
+            <span>Gallery</span>
+          </button>
+          <button className="media-menu-btn" onClick={() => { cameraRef.current?.click(); }}>
+            <span className="media-menu-icon" style={{ background: '#0891b2' }}>📸</span>
+            <span>Camera</span>
+          </button>
+          <button className="media-menu-btn" onClick={() => { setShowLocationModal(true); setShowMediaMenu(false); }}>
+            <span className="media-menu-icon" style={{ background: '#059669' }}>📍</span>
+            <span>Location</span>
+          </button>
+          <button className="media-menu-btn" onClick={() => { setShowContactForm(true); setShowMediaMenu(false); }}>
+            <span className="media-menu-icon" style={{ background: '#d97706' }}>👤</span>
+            <span>Contact</span>
+          </button>
+          <button className="media-menu-btn" onClick={() => { setShowMediaMenu(false); startRecording(); }}>
+            <span className="media-menu-icon" style={{ background: '#dc2626' }}>🎤</span>
+            <span>Voice</span>
+          </button>
+        </div>
+      )}
+      {isRecording && (
+        <div className="voice-recording-bar">
+          <div className="voice-dot" />
+          <span>Recording… {recSeconds}s / 60s max</span>
+          <button className="btn btn-outline btn-mini" onClick={cancelRecording}>Cancel</button>
+          <button className="btn btn-primary btn-mini" onClick={stopRecording}>Send</button>
+        </div>
+      )}
+      {showLocationModal && (
+        <LocationChatModal
+          onSend={(locationData) => { sendLocationMsg(locationData); setShowLocationModal(false); }}
+          onClose={() => setShowLocationModal(false)}
+        />
+      )}
+      {showContactForm && (
+        <Modal onClose={() => setShowContactForm(false)} title="Share Contact">
+          <label>Name</label>
+          <input value={contactName} onChange={e => setContactName(e.target.value)} placeholder="Person's name" />
+          <label>Phone</label>
+          <input value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="Phone number" type="tel" />
+          <div className="modal-buttons">
+            <button className="btn btn-outline" onClick={() => setShowContactForm(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={!contactName && !contactPhone} onClick={() => { sendContact(); setShowContactForm(false); }}>
+              <Send size={14} /> Send Contact
+            </button>
+          </div>
+        </Modal>
+      )}
       <div className="chat-input-row">
-        <button className="chat-media-btn" onClick={() => setShowEmoji(s => !s)} title="Emoji">😊</button>
-        <input ref={imageRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { sendImage(e.target.files?.[0]); e.target.value = ''; }} />
-        <button className="chat-media-btn" onClick={() => imageRef.current?.click()} title="Send Photo" disabled={sending}><Camera size={18} /></button>
-        <button className="chat-media-btn" onClick={sendLocation} title="Send Location" disabled={sending}><MapPin size={18} /></button>
+        <button className="chat-media-btn" onClick={() => { setShowEmoji(s => !s); setShowMediaMenu(false); }} title="Emoji">😊</button>
+        <button className="chat-media-btn" onClick={() => { setShowMediaMenu(s => !s); setShowEmoji(false); }} title="Attach" disabled={sending}><Paperclip size={18} /></button>
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
