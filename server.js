@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -18,6 +19,7 @@ const PORT = process.env.PORT || 5000;
 const TIMEZONE = process.env.TIMEZONE || 'Asia/Kolkata';
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
+app.use(compression()); // gzip all responses — big speed win on slow connections
 app.use(cors());
 app.use(express.json());
 
@@ -493,8 +495,11 @@ app.get('/api/students', authenticate, async (req, res) => {
       const s = await Student.findById(req.user.studentId);
       return res.json(s ? [s] : []);
     }
-    // Teacher: only approved students in the main list
-    const students = await Student.find({ pendingApproval: { $ne: true } }).sort({ name: 1 });
+    // Teacher: only approved students in the main list.
+    // ?light=1 skips the heavy base64 photo field for faster, smaller responses.
+    const query = Student.find({ pendingApproval: { $ne: true } }).sort({ name: 1 });
+    if (req.query.light === '1') query.select('-photo');
+    const students = await query;
     res.json(students);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -681,6 +686,33 @@ app.get('/api/attendance/summary/:studentId', authenticate, async (req, res) => 
       .map(r => ({ date: r.date, reason: r.reason || 'No reason given' }))
       .sort((a, b) => b.date.localeCompare(a.date));
     res.json({ present, absent, total, percentage, absentDays });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batched summary for ALL students in ONE query (used by the Summary tab).
+// Replaces firing one request per student, which was very slow on free tiers.
+app.get('/api/attendance/summary-all', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const grouped = await Attendance.aggregate([
+      { $group: {
+        _id: '$studentId',
+        present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+        absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+      }},
+    ]);
+    const summaries = {};
+    grouped.forEach(g => {
+      const total = g.present + g.absent;
+      summaries[String(g._id)] = {
+        present: g.present,
+        absent: g.absent,
+        total,
+        percentage: total ? Math.round((g.present / total) * 100) : 0,
+      };
+    });
+    res.json({ summaries });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
