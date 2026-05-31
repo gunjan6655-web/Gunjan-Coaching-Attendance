@@ -1705,7 +1705,7 @@ function SummaryTab({ info }) {
       </div>
 
       <div className="summary-grid">
-        <div>
+        <div className={'summary-list-col' + (selected ? ' has-selected' : '')}>
           <div className="search-bar">
             <Search size={16} />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search students" />
@@ -1716,6 +1716,7 @@ function SummaryTab({ info }) {
               {allClasses.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           )}
+          <p className="small muted" style={{ margin: '8px 0 4px' }}>{filtered.length} student{filtered.length !== 1 ? 's' : ''}</p>
           <div className="list">
             {filtered.map(s => {
               const sm = allSummaries[s._id];
@@ -1731,7 +1732,7 @@ function SummaryTab({ info }) {
             })}
           </div>
         </div>
-        <div>
+        <div className={'summary-detail-col' + (!selected ? ' no-selected' : '')}>
           {!selected ? (
             <div className="empty">
               <Search size={48} color="#999" />
@@ -1740,6 +1741,9 @@ function SummaryTab({ info }) {
             </div>
           ) : (
             <>
+              <button className="btn btn-outline btn-mini summary-back-btn" onClick={() => setSelected(null)} style={{ marginBottom: 12 }}>
+                <ArrowLeft size={14} /> Back to list
+              </button>
               <div className="row" style={{justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start'}}>
                 <div className="row" style={{ gap: 14, alignItems: 'center' }}>
                   {selected.photo
