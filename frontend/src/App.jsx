@@ -25,6 +25,25 @@ api.interceptors.request.use(config => {
   return config;
 });
 
+// Handle expired/invalid sessions globally
+api.interceptors.response.use(
+  r => r,
+  err => {
+    if (err.response?.status === 401 && err.response?.data?.error?.includes('token') === false) {
+      const msg = err.response?.data?.error || '';
+      // If token expired or invalid, clear and reload
+      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid token') || msg.toLowerCase().includes('jwt')) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('role');
+        localStorage.removeItem('selectedStudent');
+        alert('Your session expired. Please sign in again.');
+        window.location.reload();
+      }
+    }
+    return Promise.reject(err);
+  }
+);
+
 // ============================
 // HELPERS
 // ============================
@@ -1075,6 +1094,13 @@ function TodayTab({ info, announcements }) {
         <div className="stat muted"><Info size={20} /> {visible.length - visibleAtt.length} Not marked</div>
         <div className="stat blue"><Users size={20} /> {visible.length} Total</div>
       </div>
+
+      {new Date().getDay() === 0 && (
+        <div className="off-day-banner" style={{ background: '#fef3c7', borderLeft: '4px solid #d97706', padding: '10px 14px', borderRadius: 8, margin: '12px 0' }}>
+          <strong>⚠️ Today is Sunday (off-day)</strong>
+          <p className="small" style={{ margin: 0 }}>Marking present today is allowed but won't count toward the working-day fee calculation.</p>
+        </div>
+      )}
 
       <div className="toolbar">
         {(info.batches?.length || 0) > 0 && (
@@ -2446,7 +2472,96 @@ function SettingsTab({ info, refreshInfo }) {
       <hr />
       <StorageCard />
       <hr />
+      <ChangePasswordSection />
+      <hr />
+      <FullBackupSection />
+      <hr />
       <MonthlyDataManager />
+    </div>
+  );
+}
+
+// Change teacher password
+function ChangePasswordSection() {
+  const [oldPw, setOldPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const submit = async () => {
+    setErr(''); setMsg('');
+    if (newPw !== confirmPw) { setErr('New passwords do not match'); return; }
+    if (newPw.length < 4) { setErr('New password must be at least 4 characters'); return; }
+    setBusy(true);
+    try {
+      await api.post('/auth/change-password', { oldPassword: oldPw, newPassword: newPw });
+      setMsg('Password changed successfully!');
+      setOldPw(''); setNewPw(''); setConfirmPw('');
+    } catch (e) {
+      setErr(e.response?.data?.error || 'Failed');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <h3 style={{ marginBottom: 4 }}><KeyRound size={16} /> Change Password</h3>
+      <p className="small muted" style={{ marginBottom: 8 }}>Update your teacher password. Keep it safe!</p>
+      <label>Current password</label>
+      <input type={show ? 'text' : 'password'} value={oldPw} onChange={e => setOldPw(e.target.value)} placeholder="Current password" />
+      <label>New password</label>
+      <input type={show ? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="New password (min 4 chars)" />
+      <label>Confirm new password</label>
+      <input type={show ? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Repeat new password" />
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <button className="btn btn-outline btn-mini" type="button" onClick={() => setShow(s => !s)}>
+          {show ? <EyeOff size={12} /> : <Eye size={12} />} {show ? 'Hide' : 'Show'} passwords
+        </button>
+        <button className="btn btn-primary" type="button" onClick={submit} disabled={busy || !oldPw || !newPw}>
+          <Save size={14} /> {busy ? 'Saving…' : 'Change Password'}
+        </button>
+      </div>
+      {msg && <p className="small" style={{ color: '#16a34a', marginTop: 4 }}>✓ {msg}</p>}
+      {err && <p className="small" style={{ color: '#ef4444', marginTop: 4 }}>{err}</p>}
+    </div>
+  );
+}
+
+// Full backup of all data
+function FullBackupSection() {
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState('');
+
+  const download = async () => {
+    setBusy(true); setInfo('');
+    try {
+      const r = await api.get('/backup/full');
+      const json = JSON.stringify(r.data, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `GunjanCoaching_Backup_${new Date().toISOString().substring(0,10)}.json`;
+      a.click();
+      const c = r.data.counts;
+      setInfo(`✓ Downloaded backup with ${c.students} students, ${c.attendance} attendance records, ${c.feePayments} fee records.`);
+    } catch (e) {
+      setInfo('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <h3 style={{ marginBottom: 4 }}><Download size={16} /> Full Data Backup</h3>
+      <p className="small muted" style={{ marginBottom: 8 }}>
+        Download every student, attendance record, fee payment, and message as a JSON file. Keep this safe — MongoDB free tier doesn't auto-backup.
+        <br />Recommended: download once a month.
+      </p>
+      <button className="btn btn-primary" type="button" onClick={download} disabled={busy}>
+        <Download size={14} /> {busy ? 'Preparing…' : 'Download Full Backup (.json)'}
+      </button>
+      {info && <p className="small" style={{ marginTop: 6 }}>{info}</p>}
     </div>
   );
 }
@@ -4406,11 +4521,15 @@ function PendingFeesTab({ info }) {
                 </div>
               </div>
               <div className="row" style={{ gap: 6 }}>
-                {s.parentPhone && (
+                {s.parentPhone ? (
                   <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
                     href={whatsappLink(s.parentPhone, reminderMsg(s))}>
                     <MessageCircle size={12} /> Remind
                   </a>
+                ) : (
+                  <span className="badge red small" title="Add parent phone number to send WhatsApp reminder" style={{ alignSelf: 'center' }}>
+                    ⚠ No parent phone
+                  </span>
                 )}
                 <button className="btn btn-green btn-mini" onClick={() => markPaid(s)} disabled={marking === s._id}>
                   <Check size={12} /> {marking === s._id ? '…' : 'Mark Paid'}
