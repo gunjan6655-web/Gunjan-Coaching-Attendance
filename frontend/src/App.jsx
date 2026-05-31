@@ -25,20 +25,21 @@ api.interceptors.request.use(config => {
   return config;
 });
 
-// Handle expired/invalid sessions globally
+// Handle expired/invalid sessions globally.
+// Only fires when a token actually exists in storage AND the server reports a
+// token/auth problem — so a failed login (no stored token) never triggers a reload.
 api.interceptors.response.use(
   r => r,
   err => {
-    if (err.response?.status === 401 && err.response?.data?.error?.includes('token') === false) {
-      const msg = err.response?.data?.error || '';
-      // If token expired or invalid, clear and reload
-      if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('invalid token') || msg.toLowerCase().includes('jwt')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('role');
-        localStorage.removeItem('selectedStudent');
-        alert('Your session expired. Please sign in again.');
-        window.location.reload();
-      }
+    const status = err.response?.status;
+    const msg = (err.response?.data?.error || '').toLowerCase();
+    const hasToken = !!localStorage.getItem('token');
+    if (status === 401 && hasToken && (msg.includes('token') || msg.includes('expired') || msg.includes('jwt'))) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('role');
+      localStorage.removeItem('selectedStudent');
+      alert('Your session expired. Please sign in again.');
+      window.location.reload();
     }
     return Promise.reject(err);
   }
@@ -1336,7 +1337,6 @@ function StudentsTab({ info, refreshInfo }) {
                   {age != null && <span className="age-tag">Age {age}</span>}
                   <p className="muted small">Roll #{s.rollNumber} · {s.phone || 'No phone'}</p>
                   {s.className && <p className="small">Class: <strong>{s.className}</strong></p>}
-                  {s.monthlyFee > 0 && <p className="small">Fee: <strong>₹{Number(s.monthlyFee).toLocaleString('en-IN')}/month</strong></p>}
                   {batch && <p className="small"><Layers size={12} /> Batch: <strong>{batch.name}</strong> ({batch.startTime}-{batch.endTime})</p>}
                   {s.subjects?.length > 0 && <p className="small">Subjects: {s.subjects.join(', ')}</p>}
                   {Number(s.monthlyFee) > 0 && <p className="small"><IndianRupee size={12} /> Fee: <strong>{formatRupee(s.monthlyFee)}</strong>/month</p>}
