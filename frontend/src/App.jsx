@@ -1638,10 +1638,15 @@ function SummaryTab({ info }) {
   const [allSummaries, setAllSummaries] = useState({}); // {studentId: {present, absent, percentage}}
 
   useEffect(() => {
-    api.get('/students').then(async r => {
+    api.get('/students?light=1').then(async r => {
       setStudents(r.data);
       setLoading(false);
-      // pre-fetch summaries for chart
+      // Fast path: fetch every student's summary in ONE request.
+      try {
+        const all = await api.get('/attendance/summary-all');
+        if (all.data?.summaries) { setAllSummaries(all.data.summaries); return; }
+      } catch {}
+      // Fallback (only if the batched endpoint isn't available): per-student.
       const map = {};
       await Promise.all(r.data.map(async s => {
         try {
@@ -1656,14 +1661,16 @@ function SummaryTab({ info }) {
   const loadStudent = async (s) => {
     setSelected(s);
     setSummary(null); setHistory([]); setStudentFees(null);
-    const [summ, hist, fees] = await Promise.all([
+    const [summ, hist, fees, full] = await Promise.all([
       api.get('/attendance/summary/' + s._id),
       api.get('/attendance/student/' + s._id),
       api.get('/fees/student/' + s._id).catch(() => ({ data: null })),
+      api.get('/students/' + s._id).catch(() => ({ data: null })),
     ]);
     setSummary(summ.data);
     setHistory(hist.data);
     setStudentFees(fees.data);
+    if (full.data) setSelected(full.data); // full record includes photo
   };
 
   if (loading) return <p className="muted">Loading...</p>;
