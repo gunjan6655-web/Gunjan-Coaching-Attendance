@@ -12,7 +12,6 @@ import {
   Mic, MicOff, Video, UserCheck, Navigation, Download, FileSpreadsheet, Paperclip
 } from 'lucide-react';
 import axios from 'axios';
-import * as XLSX from 'xlsx';
 import './index.css';
 
 // ============================
@@ -2664,8 +2663,10 @@ function MonthlyDataManager() {
     } catch {} finally { setPreviewLoading(false); }
   };
 
-  const downloadExcel = () => {
+  const downloadExcel = async () => {
     if (!previewData) return;
+    // Load the Excel library only when actually needed (keeps initial app load fast)
+    const XLSX = await import('xlsx');
     const wb = XLSX.utils.book_new();
 
     // Students sheet
