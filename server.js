@@ -337,7 +337,7 @@ app.post('/api/auth/setup', async (req, res) => {
       ...rest,
     });
     await config.save();
-    const token = jwt.sign({ role: 'teacher' }, JWT_SECRET);
+    const token = jwt.sign({ role: 'teacher' }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, role: 'teacher' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -357,7 +357,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (config.teacherPassword) {
       const isT = await bcrypt.compare(raw, config.teacherPassword);
       if (isT) {
-        const token = jwt.sign({ role: 'teacher' }, JWT_SECRET);
+        const token = jwt.sign({ role: 'teacher' }, JWT_SECRET, { expiresIn: '30d' });
         return res.json({ token, role: 'teacher' });
       }
     }
@@ -1050,6 +1050,54 @@ app.get('/api/config', authenticate, async (req, res) => {
   }
 });
 
+// Change teacher password (requires old password)
+app.post('/api/auth/change-password', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) return res.status(400).json({ error: 'Both old and new password required' });
+    if (newPassword.length < 4) return res.status(400).json({ error: 'New password must be at least 4 characters' });
+    const config = await Config.findOne();
+    if (!config?.teacherPassword) return res.status(404).json({ error: 'Not set up' });
+    const ok = await bcrypt.compare(oldPassword, config.teacherPassword);
+    if (!ok) return res.status(401).json({ error: 'Current password is wrong' });
+    config.teacherPassword = await bcrypt.hash(newPassword, 10);
+    await config.save();
+    res.json({ ok: true, message: 'Password changed successfully' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Full backup — downloads ALL data as a JSON file
+app.get('/api/backup/full', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const [config, students, attendance, announcements, parentMsg, complaints, chat, fees, exams] = await Promise.all([
+      Config.findOne().select('-teacherPassword').lean(),
+      Student.find().lean(),
+      Attendance.find().lean(),
+      Announcement.find().lean(),
+      ParentMessage.find().lean(),
+      Complaint.find().lean(),
+      ChatMessage.find().select('-image -audio').lean(), // exclude binary
+      FeePayment.find().lean(),
+      Exam.find().lean(),
+    ]);
+    res.json({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      counts: {
+        students: students.length,
+        attendance: attendance.length,
+        announcements: announcements.length,
+        parentMessages: parentMsg.length,
+        complaints: complaints.length,
+        chatMessages: chat.length,
+        feePayments: fees.length,
+        exams: exams.length,
+      },
+      data: { config, students, attendance, announcements, parentMessages: parentMsg, complaints, chatMessages: chat, feePayments: fees, exams },
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.put('/api/config', authenticate, teacherOnly, async (req, res) => {
   try {
     const config = await Config.findOne();
@@ -1058,12 +1106,18 @@ app.put('/api/config', authenticate, teacherOnly, async (req, res) => {
 
     // Subjects are just names now.
     if (subjects !== undefined) {
+      const names = (subjects || []).map(s => (typeof s === 'string' ? s : s.name)?.trim().toLowerCase());
+      const dupes = names.filter((n, i) => n && names.indexOf(n) !== i);
+      if (dupes.length) return res.status(400).json({ error: 'Duplicate subject name: ' + dupes[0] });
       config.subjects = (subjects || []).map(s =>
         typeof s === 'string' ? { name: s } : { name: s.name }
       );
     }
     // Classes carry the monthly fee.
     if (classes !== undefined) {
+      const names = (classes || []).map(c => (c.name || '').trim().toLowerCase());
+      const dupes = names.filter((n, i) => n && names.indexOf(n) !== i);
+      if (dupes.length) return res.status(400).json({ error: 'Duplicate class name: ' + dupes[0] });
       config.classes = (classes || []).map(c => ({
         _id: c._id,
         name: c.name,
@@ -1071,6 +1125,9 @@ app.put('/api/config', authenticate, teacherOnly, async (req, res) => {
       }));
     }
     if (batches !== undefined) {
+      const names = (batches || []).map(b => (b.name || '').trim().toLowerCase());
+      const dupes = names.filter((n, i) => n && names.indexOf(n) !== i);
+      if (dupes.length) return res.status(400).json({ error: 'Duplicate batch name: ' + dupes[0] + '. Please use unique names like "Evening A" and "Evening B".' });
       config.batches = (batches || []).map(b => ({
         _id: b._id,
         name: b.name,
