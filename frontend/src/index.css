@@ -642,6 +642,14 @@ textarea { resize: vertical; min-height: 60px; }
 }
 @media (max-width: 768px) { .summary-grid { grid-template-columns: 1fr; } }
 
+/* Summary mobile: hide list when student selected, hide details when no student */
+.summary-back-btn { display: none; }
+@media (max-width: 768px) {
+  .summary-list-col.has-selected { display: none; }
+  .summary-detail-col.no-selected { display: none; }
+  .summary-back-btn { display: flex !important; }
+}
+
 /* ============================
    BIG CARDS
    ============================ */
