@@ -95,6 +95,62 @@ const formatDate = (iso) => {
 
 const formatRupee = (n) => '₹' + (Math.round((n || 0) * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
+// Append chat messages while skipping any whose _id is already present.
+// Prevents duplicates from the rare send/poll race (a message you just sent
+// can also arrive via an in-flight poll before its response returns).
+const mergeMessages = (existing, incoming) => {
+  if (!incoming || !incoming.length) return existing;
+  const seen = new Set(existing.map((x) => x._id));
+  const add = incoming.filter((x) => x && x._id && !seen.has(x._id));
+  return add.length ? [...existing, ...add] : existing;
+};
+
+// Polite, respectful WhatsApp reminder for an absent student.
+const absentReminderMsg = (s, dateISO, info) => {
+  const teacher = info?.teacherName || 'your teacher';
+  const place = info?.classroomName || 'the coaching center';
+  const greet = s?.parentName ? `Dear ${s.parentName}` : 'Dear Parent';
+  return `${greet},\n\nThis is ${teacher} from ${place}. We noticed that ${s?.name} (Roll #${s?.rollNumber}) was marked absent on ${formatDate(dateISO)}.\n\nWe hope everything is alright. If there's anything we should know, please feel free to let us know. We look forward to seeing ${s?.name} back in class soon.\n\nWarm regards,\n${teacher}`;
+};
+
+// Month label like "May 2026" from a YYYY-MM string.
+const monthLabel = (ym) => {
+  if (!/^\d{4}-\d{2}$/.test(ym || '')) return ym || '';
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+};
+
+// Polite, respectful fee reminder covering one or more pending months.
+const feeReminderMsg = (student, months, total, info) => {
+  const teacher = info?.teacherName || 'your teacher';
+  const place = info?.classroomName || 'the coaching center';
+  const greet = student?.parentName ? `Dear ${student.parentName}` : 'Dear Parent';
+  const lines = months.map(m => `• ${monthLabel(m.month)}: ${formatRupee(m.amount)}`).join('\n');
+  const multi = months.length > 1;
+  return `${greet},\n\nThis is ${teacher} from ${place}. This is a gentle reminder regarding the ${multi ? 'pending fees' : 'pending fee'} for ${student?.name} (Roll #${student?.rollNumber}).\n\n${multi ? 'Pending months:' : 'Pending month:'}\n${lines}\n\nTotal payable: ${formatRupee(total)}\n\nWhenever it is convenient for you, kindly arrange the payment. If you have any questions, please feel free to reach out. Thank you for your continued support.\n\nWarm regards,\n${teacher}`;
+};
+
+// Motivational quotes for exam/test reminders.
+const EXAM_QUOTES = [
+  'Success is the sum of small efforts repeated day in and day out.',
+  'Believe you can and you are halfway there.',
+  'Hard work beats talent when talent does not work hard.',
+  'Every accomplishment starts with the decision to try.',
+  'The secret of getting ahead is getting started.',
+  'Push yourself, because no one else is going to do it for you.',
+  'Strive for progress, not perfection.',
+];
+
+// Polite, motivational WhatsApp message with full exam/test details.
+const examReminderMsg = (student, exam, info, quote) => {
+  const teacher = info?.teacherName || 'your teacher';
+  const place = info?.classroomName || 'the coaching center';
+  const greet = student?.parentName ? `Dear ${student.parentName}` : 'Dear Parent';
+  const dateStr = exam?.examDate ? formatDate(exam.examDate) : 'To be announced';
+  const desc = exam?.description ? `\n${exam.description}\n` : '';
+  return `${greet},\n\nThis is ${teacher} from ${place}. Here are the details of an upcoming test for ${student?.name} (Roll #${student?.rollNumber}):\n\n📝 ${exam?.title}\n📅 Date: ${dateStr}${desc}\n"${quote}"\n\nWishing ${student?.name} all the very best! Kindly ensure good preparation and timely arrival.\n\nWarm regards,\n${teacher}`;
+};
+
 const getSubjectName = (s) => typeof s === 'string' ? s : s?.name;
 
 // Find a batch object from its id within an info.batches array
@@ -804,7 +860,7 @@ function TeacherDashboard({ info, announcements, onSignOut, refreshInfo }) {
         <LazyTab active={tab==='students'}><StudentsTab info={info} refreshInfo={refreshInfo} /></LazyTab>
         <LazyTab active={tab==='summary'}><SummaryTab info={info} /></LazyTab>
         <LazyTab active={tab==='fees'}><TeacherFeesTab info={info} /></LazyTab>
-        <LazyTab active={tab==='exams'}><ExamsTab /></LazyTab>
+        <LazyTab active={tab==='exams'}><ExamsTab info={info} /></LazyTab>
         <LazyTab active={tab==='holidays'}><AnnouncementsTab info={info} /></LazyTab>
         <LazyTab active={tab==='chat'}><GroupChat role="teacher" currentName={info.teacherName || 'Teacher'} info={info} /></LazyTab>
         <LazyTab active={tab==='messages'}><ParentChatTab /></LazyTab>
@@ -917,32 +973,35 @@ function TodayTab({ info, announcements }) {
   const [classFilter, setClassFilter] = useState('');
   const [studentMode, setStudentMode] = useState(false);
   const [studentModeDone, setStudentModeDone] = useState(null);
+  const [date, setDate] = useState(todayISO());        // which day we're viewing/editing
+  const isToday = date === todayISO();
 
   const load = async () => {
     setLoading(true);
     try {
-      const [s, a] = await Promise.all([api.get('/students'), api.get('/attendance/today')]);
+      const attReq = isToday ? api.get('/attendance/today') : api.get('/attendance/by-date', { params: { date } });
+      const [s, a] = await Promise.all([api.get('/students'), attReq]);
       setStudents(s.data);
       setTodayAtt(a.data);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [date]);  // reload when the selected day changes
 
   const getAtt = (id) => todayAtt.find(a => String(a.studentId) === String(id));
 
   const nowHM = () => new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
 
   const markPresent = (id) => {
-    const t = nowHM();
-    const optimistic = { _id: 'opt_' + id, studentId: id, status: 'present', markedBy: 'teacher', inTime: t, outTime: '', date: todayISO() };
+    const t = isToday ? nowHM() : (info.classStart || '09:00');
+    const optimistic = { _id: 'opt_' + id, studentId: id, status: 'present', markedBy: 'teacher', inTime: t, outTime: '', date };
     setTodayAtt(prev => {
       const exists = prev.find(a => String(a.studentId) === String(id));
       if (exists) return prev.map(a => String(a.studentId) === String(id) ? { ...a, status: 'present', markedBy: 'teacher', inTime: t } : a);
       return [...prev, optimistic];
     });
-    api.post('/attendance/teacher-mark', { studentId: id, status: 'present' })
+    api.post('/attendance/teacher-mark', { studentId: id, status: 'present', date })
       .then(r => setTodayAtt(prev => prev.map(a => String(a.studentId) === String(id) ? r.data : a)))
       .catch(err => {
         setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(id)));
@@ -954,7 +1013,7 @@ function TodayTab({ info, announcements }) {
     const sid = markingStudent._id;
     const rsn = reason || 'No reason given';
     // Instant UI update
-    const optimistic = { _id: 'opt_' + sid, studentId: sid, status: 'absent', markedBy: 'teacher', reason: rsn, date: todayISO() };
+    const optimistic = { _id: 'opt_' + sid, studentId: sid, status: 'absent', markedBy: 'teacher', reason: rsn, date };
     setTodayAtt(prev => {
       const exists = prev.find(a => String(a.studentId) === String(sid));
       if (exists) return prev.map(a => String(a.studentId) === String(sid) ? { ...a, status: 'absent', reason: rsn, markedBy: 'teacher' } : a);
@@ -962,7 +1021,7 @@ function TodayTab({ info, announcements }) {
     });
     setMarkingStudent(null); setReason('');
     // Background save
-    api.post('/attendance/teacher-mark', { studentId: sid, status: 'absent', reason: rsn })
+    api.post('/attendance/teacher-mark', { studentId: sid, status: 'absent', reason: rsn, date })
       .then(r => setTodayAtt(prev => prev.map(a => String(a.studentId) === String(sid) ? r.data : a)))
       .catch(err => {
         setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(sid)));
@@ -973,7 +1032,7 @@ function TodayTab({ info, announcements }) {
   // Undo: instant, no confirmation needed
   const unmark = (studentId) => {
     setTodayAtt(prev => prev.filter(a => String(a.studentId) !== String(studentId)));
-    api.delete('/attendance/unmark', { data: { studentId } })
+    api.delete('/attendance/unmark', { data: { studentId, date } })
       .catch(err => {
         load(); // revert on failure
         alert('Failed: ' + err.message);
@@ -981,22 +1040,26 @@ function TodayTab({ info, announcements }) {
   };
 
   const markAllPresent = async () => {
-    if (!confirm(batchFilter ? 'Mark everyone in this batch as present today?' : 'Mark all students as present today?')) return;
+    const when = isToday ? 'today' : `on ${formatDate(date)}`;
+    const who = batchFilter || classFilter ? `the ${visible.length} student${visible.length !== 1 ? 's' : ''} currently shown` : 'all students';
+    if (!confirm(`Mark ${who} as present ${when}?`)) return;
     setBulkLoading(true);
-    // Optimistic: mark all visible students present immediately
-    const today = todayISO();
     setTodayAtt(prev => {
       const markedIds = new Set(prev.map(a => String(a.studentId)));
       const toAdd = visible.filter(s => !markedIds.has(String(s._id)))
-        .map(s => ({ _id: 'opt_' + s._id, studentId: s._id, status: 'present', markedBy: 'teacher', date: today }));
+        .map(s => ({ _id: 'opt_' + s._id, studentId: s._id, status: 'present', markedBy: 'teacher', date }));
       const updated = prev.map(a => {
         const inVisible = visible.some(s => String(s._id) === String(a.studentId));
         return inVisible ? { ...a, status: 'present', markedBy: 'teacher' } : a;
       });
       return [...updated, ...toAdd];
     });
-    // Background save
-    api.post('/attendance/mark-all-present', batchFilter ? { batchId: batchFilter } : {})
+    const body = {
+      ...(batchFilter ? { batchId: batchFilter } : {}),
+      ...(classFilter ? { className: classFilter } : {}),
+      date,
+    };
+    api.post('/attendance/mark-all-present', body)
       .then(() => load())
       .catch(err => { load(); alert('Failed: ' + err.message); })
       .finally(() => setBulkLoading(false));
@@ -1048,14 +1111,35 @@ function TodayTab({ info, announcements }) {
     </div>
   );
 
-  const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const today = new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const selDow = new Date(date + 'T00:00:00').getDay();
   const visibleAtt = todayAtt.filter(a => visible.some(s => String(s._id) === String(a.studentId)));
   const presentCount = visibleAtt.filter(a => a.status === 'present').length;
   const absentCount = visibleAtt.filter(a => a.status === 'absent').length;
 
   return (
     <div>
-      {birthdayStudents.length > 0 && (
+      {/* Date selector — pick any day to view or fix attendance */}
+      <div className="date-bar">
+        <label style={{ margin: 0, textTransform: 'none', letterSpacing: 0 }}>📅 Date:</label>
+        <input type="date" max={todayISO()} value={date} onChange={e => setDate(e.target.value || todayISO())} className="sort-select" style={{ width: 'auto' }} />
+        {!isToday && (
+          <button className="btn btn-outline btn-mini" onClick={() => setDate(todayISO())}>
+            <RotateCcw size={12} /> Back to today
+          </button>
+        )}
+      </div>
+
+      {!isToday && (
+        <div className="off-day-banner" style={{ background: '#eff6ff', borderLeft: '4px solid #0a84ff', padding: '10px 14px', borderRadius: 8, margin: '0 0 12px' }}>
+          <div>
+            <strong>✏️ Editing a past date — {today}</strong>
+            <p className="small" style={{ margin: 0 }}>Mark or fix anyone's attendance for this day. Changes save immediately.</p>
+          </div>
+        </div>
+      )}
+
+      {isToday && birthdayStudents.length > 0 && (
         <div className="birthday-banner">
           <Cake size={20} />
           <div>
@@ -1065,7 +1149,7 @@ function TodayTab({ info, announcements }) {
         </div>
       )}
 
-      {upcomingBirthdays.length > 0 && (
+      {isToday && upcomingBirthdays.length > 0 && (
         <div className="upcoming-birthdays">
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <Cake size={16} color="#d97706" />
@@ -1095,10 +1179,10 @@ function TodayTab({ info, announcements }) {
         <div className="stat blue"><Users size={20} /> {visible.length} Total</div>
       </div>
 
-      {new Date().getDay() === 0 && (
+      {selDow === 0 && (
         <div className="off-day-banner" style={{ background: '#fef3c7', borderLeft: '4px solid #d97706', padding: '10px 14px', borderRadius: 8, margin: '12px 0' }}>
-          <strong>⚠️ Today is Sunday (off-day)</strong>
-          <p className="small" style={{ margin: 0 }}>Marking present today is allowed but won't count toward the working-day fee calculation.</p>
+          <strong>⚠️ This day is a Sunday (off-day)</strong>
+          <p className="small" style={{ margin: 0 }}>Marking present is allowed but won't count toward the working-day fee calculation.</p>
         </div>
       )}
 
@@ -1117,12 +1201,14 @@ function TodayTab({ info, announcements }) {
         )}
         {!offDay && (
           <button className="btn btn-green" onClick={markAllPresent} disabled={bulkLoading}>
-            <CheckCircle size={16} /> {bulkLoading ? 'Marking...' : (batchFilter ? 'Mark Batch Present' : 'Mark Everyone Present')}
+            <CheckCircle size={16} /> {bulkLoading ? 'Marking...' : ((batchFilter || classFilter) ? 'Mark Shown Present' : 'Mark Everyone Present')}
           </button>
         )}
-        <button className="btn btn-outline" onClick={() => setStudentMode(true)} title="Let a student mark themselves on this device">
-          <User size={16} /> Hand to Student
-        </button>
+        {isToday && (
+          <button className="btn btn-outline" onClick={() => setStudentMode(true)} title="Let a student mark themselves on this device">
+            <User size={16} /> Hand to Student
+          </button>
+        )}
       </div>
 
       <div className="list">
@@ -1163,8 +1249,20 @@ function TodayTab({ info, announcements }) {
                     {att.markedBy === 'self' && (
                       <span className="badge blue small" title="Self marked"><Info size={12} /> Self-marked</span>
                     )}
+                    {/* Polite WhatsApp reminder for absent students */}
+                    {att.status === 'absent' && (
+                      (s.parentPhone || s.phone) ? (
+                        <a className="btn-mini btn-whatsapp" target="_blank" rel="noreferrer"
+                          href={whatsappLink(s.parentPhone || s.phone, absentReminderMsg(s, date, info))}
+                          title="Send a polite WhatsApp reminder">
+                          <MessageCircle size={14} /> Remind
+                        </a>
+                      ) : (
+                        <span className="badge red small" title="No phone number on file">⚠ No phone</span>
+                      )
+                    )}
                     {/* Feature #9: undo / roll back today's mark */}
-                    <button className="btn-mini btn-outline" onClick={() => unmark(s._id)} title="Roll back today's attendance">
+                    <button className="btn-mini btn-outline" onClick={() => unmark(s._id)} title="Roll back this day's attendance">
                       <RotateCcw size={14} /> Undo
                     </button>
                   </>
@@ -1833,7 +1931,7 @@ function SummaryTab({ info }) {
               )}
 
               <div className="row" style={{justifyContent: 'space-between'}}>
-                <h3><BarChart3 size={16} /> Attendance — {monthFilter || new Date().toISOString().substring(0, 7)}</h3>
+                <h3><BarChart3 size={16} /> Attendance — {monthFilter || thisMonth()}</h3>
                 {monthOptions.length > 0 && (
                   <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="sort-select">
                     <option value="">Current month</option>
@@ -1841,7 +1939,7 @@ function SummaryTab({ info }) {
                   </select>
                 )}
               </div>
-              <AttendanceGraph history={history} month={monthFilter || new Date().toISOString().substring(0, 7)} />
+              <AttendanceGraph history={history} month={monthFilter || thisMonth()} />
 
               <h3 style={{ marginTop: 20 }}>Attendance History</h3>
               <div className="list">
@@ -1875,13 +1973,13 @@ function SummaryTab({ info }) {
 // Simple SVG bar chart used by SummaryTab and FeesTab
 // Attendance graph — calendar-style view of one month showing present/absent/unmarked days
 function AttendanceGraph({ history, month }) {
-  // month is YYYY-MM string; default to current
-  const [yStr, mStr] = (month || new Date().toISOString().substring(0, 7)).split('-');
+  // month is YYYY-MM string; default to current (IST)
+  const [yStr, mStr] = (month || thisMonth()).split('-');
   const year = Number(yStr);
   const m = Number(mStr); // 1..12
   const daysInMonth = new Date(year, m, 0).getDate();
   const firstWeekday = new Date(year, m - 1, 1).getDay(); // 0=Sun
-  const todayISO = new Date().toISOString().substring(0, 10);
+  const todayStr = todayISO(); // IST today
 
   // Build lookup of date -> status
   const byDate = {};
@@ -1893,7 +1991,7 @@ function AttendanceGraph({ history, month }) {
   for (let d = 1; d <= daysInMonth; d++) {
     const iso = `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const rec = byDate[iso];
-    if (iso <= todayISO) {
+    if (iso <= todayStr) {
       if (rec?.status === 'present') present++;
       else if (rec?.status === 'absent') absent++;
       else unmarked++;
@@ -1916,13 +2014,13 @@ function AttendanceGraph({ history, month }) {
         {dayLabels.map((d, i) => <div key={'dl' + i} className="att-cal-label">{d}</div>)}
         {cells.map((c, i) => {
           if (!c) return <div key={'e' + i} className="att-cal-cell empty" />;
-          const future = c.iso > todayISO;
+          const future = c.iso > todayStr;
           let cls = 'att-cal-cell';
           if (future) cls += ' future';
           else if (c.rec?.status === 'present') cls += ' present';
           else if (c.rec?.status === 'absent') cls += ' absent';
           else cls += ' unmarked';
-          if (c.iso === todayISO) cls += ' today';
+          if (c.iso === todayStr) cls += ' today';
           return (
             <div key={c.iso} className={cls} title={`${c.iso}${c.rec ? ': ' + c.rec.status : ''}`}>
               {c.day}
@@ -2649,6 +2747,7 @@ function MonthlyDataManager() {
   const [previewing, setPreviewing] = useState(null);
   const [previewData, setPreviewData] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [downloadingXl, setDownloadingXl] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -2670,39 +2769,22 @@ function MonthlyDataManager() {
     } catch {} finally { setPreviewLoading(false); }
   };
 
-  const downloadExcel = async () => {
-    if (!previewData) return;
-    // Load the Excel library only when actually needed (keeps initial app load fast)
-    const XLSX = await import('xlsx');
-    const wb = XLSX.utils.book_new();
-
-    // Students sheet
-    const studRows = previewData.students.map(s => ({
-      'Roll #': s.rollNumber, 'Name': s.name, 'Class': s.className || '',
-      'Phone': s.phone || '', 'Parent': s.parentName || '', 'Parent Phone': s.parentPhone || '',
-      'Monthly Fee': s.monthlyFee || 0,
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(studRows), 'Students');
-
-    // Attendance sheet
-    const attRows = previewData.attendance.map(r => ({
-      'Date': r.date, 'Name': r.studentName, 'Roll #': r.rollNumber,
-      'Class': r.className, 'Status': r.status,
-      'In Time': r.inTime || '', 'Out Time': r.outTime || '',
-      'Marked By': r.markedBy, 'Reason': r.reason || '',
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attRows), `Attendance ${previewData.month}`);
-
-    // Fees paid sheet
-    const feeRows = previewData.paid.map(s => ({
-      'Name': s.name, 'Roll #': s.rollNumber, 'Class': s.className || '',
-      'Amount Paid': s.paidAmount || s.monthlyFee || 0,
-      'Paid On': s.paidOn ? new Date(s.paidOn).toLocaleDateString('en-IN') : '',
-      'Note': s.note || '',
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(feeRows), `Fees Paid ${previewData.month}`);
-
-    XLSX.writeFile(wb, `GunjanCoaching_${previewData.month}.xlsx`);
+  const downloadExcel = async (m) => {
+    const mon = m || previewData?.month;
+    if (!mon) return;
+    setDownloadingXl(true);
+    try {
+      // Server builds a fully-formatted, colour-coded workbook (Students, Attendance, Fees).
+      const r = await api.get('/export/excel', { params: { month: mon }, responseType: 'blob' });
+      const blob = new Blob([r.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `Report_${mon}.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+      alert('Could not generate Excel. Please try again.');
+    } finally { setDownloadingXl(false); }
   };
 
   const downloadCSV = (type) => {
@@ -2769,7 +2851,7 @@ function MonthlyDataManager() {
                     <>
                       <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                         <strong>{previewData.attendance.length} attendance records · {previewData.paid.length} paid fees</strong>
-                        <button className="btn btn-green btn-mini" onClick={downloadExcel}><FileSpreadsheet size={12} /> Download Excel (all sheets)</button>
+                        <button className="btn btn-green btn-mini" disabled={downloadingXl} onClick={() => downloadExcel(previewData.month)}><FileSpreadsheet size={12} /> {downloadingXl ? 'Preparing…' : 'Download Excel (formatted)'}</button>
                         <button className="btn btn-outline btn-mini" onClick={() => downloadCSV('attendance')}><Download size={12} /> Attendance CSV</button>
                         <button className="btn btn-outline btn-mini" onClick={() => downloadCSV('fees')}><Download size={12} /> Fees CSV</button>
                       </div>
@@ -3466,7 +3548,7 @@ function GroupChat({ role, currentName, info }) {
     try {
       const r = await api.get('/chat/messages', { params: { since: lastTsRef.current } });
       if (r.data.messages?.length) {
-        setMessages(m => [...m, ...r.data.messages]);
+        setMessages(m => mergeMessages(m, r.data.messages));
         lastTsRef.current = r.data.messages[r.data.messages.length - 1].createdAt;
       }
     } catch {}
@@ -3488,7 +3570,7 @@ function GroupChat({ role, currentName, info }) {
     setSending(true);
     try {
       const r = await api.post('/chat/messages', { text, messageType: 'text' });
-      setMessages(m => [...m, r.data.message]);
+      setMessages(m => mergeMessages(m, [r.data.message]));
       lastTsRef.current = r.data.message.createdAt;
       setInput(''); setShowEmoji(false); setShowMediaMenu(false);
     } catch (err) { setError(err.response?.data?.error || 'Failed to send'); }
@@ -3516,7 +3598,7 @@ function GroupChat({ role, currentName, info }) {
         reader.readAsDataURL(file);
       });
       const r = await api.post('/chat/messages', { text: '', messageType: 'image', image });
-      setMessages(m => [...m, r.data.message]);
+      setMessages(m => mergeMessages(m, [r.data.message]));
       lastTsRef.current = r.data.message.createdAt;
     } catch (err) { setError(err.response?.data?.error || 'Failed'); }
     finally { setSending(false); }
@@ -3526,7 +3608,7 @@ function GroupChat({ role, currentName, info }) {
     setSending(true);
     try {
       const r = await api.post('/chat/messages', { text: '📍 Location', messageType: 'location', locationData });
-      setMessages(m => [...m, r.data.message]);
+      setMessages(m => mergeMessages(m, [r.data.message]));
       lastTsRef.current = r.data.message.createdAt;
     } catch (err) { setError('Failed to send location'); }
     finally { setSending(false); }
@@ -3540,7 +3622,7 @@ function GroupChat({ role, currentName, info }) {
         messageType: 'contact',
         contactData: { name: contactName, phone: contactPhone }
       });
-      setMessages(m => [...m, r.data.message]);
+      setMessages(m => mergeMessages(m, [r.data.message]));
       lastTsRef.current = r.data.message.createdAt;
       setContactName(''); setContactPhone('');
     } catch (err) { setError('Failed'); }
@@ -3565,7 +3647,7 @@ function GroupChat({ role, currentName, info }) {
           setSending(true);
           try {
             const r = await api.post('/chat/messages', { text: '🎤 Voice message', messageType: 'audio', audio: reader.result });
-            setMessages(m => [...m, r.data.message]);
+            setMessages(m => mergeMessages(m, [r.data.message]));
             lastTsRef.current = r.data.message.createdAt;
           } catch (err) { setError('Failed to send voice note'); }
           finally { setSending(false); }
@@ -4013,7 +4095,7 @@ function StudentMarkPresent({ student }) {
   const checkToday = async () => {
     try {
       const r = await api.get('/attendance/student/' + student._id);
-      const today = new Date().toISOString().substring(0, 10);
+      const today = todayISO();
       const todayRec = (r.data || []).find(a => a.date === today);
       if (todayRec) setTodayStatus(todayRec);
     } catch {}
@@ -4213,7 +4295,7 @@ function StudentDetailModal({ student, info, onClose, onEdit }) {
   const last30 = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
-    const iso = d.toISOString().substring(0, 10);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const rec = history.find(h => h.date === iso);
     last30.push({
       date: iso,
@@ -4465,11 +4547,12 @@ function StudentBioEditor({ student }) {
 
 // Pending fees tab for teacher
 function PendingFeesTab({ info }) {
-  const [month, setMonth] = useState(new Date().toISOString().substring(0, 7));
+  const [month, setMonth] = useState(thisMonth());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState(null);
   const [viewingStudent, setViewingStudent] = useState(null);
+  const [duesFor, setDuesFor] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -4529,6 +4612,9 @@ function PendingFeesTab({ info }) {
                 </div>
               </div>
               <div className="row" style={{ gap: 6 }}>
+                <button className="btn btn-outline btn-mini" onClick={() => setDuesFor(s)} title="See all pending months and send a combined reminder">
+                  <Wallet size={12} /> Dues
+                </button>
                 {s.parentPhone ? (
                   <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
                     href={whatsappLink(s.parentPhone, reminderMsg(s))}>
@@ -4550,12 +4636,127 @@ function PendingFeesTab({ info }) {
       {viewingStudent && (
         <StudentDetailModal student={viewingStudent} info={info || {}} onClose={() => setViewingStudent(null)} onEdit={() => setViewingStudent(null)} />
       )}
+      {duesFor && (
+        <FeeDuesModal student={duesFor} info={info || {}} onClose={() => setDuesFor(null)} onChanged={load} />
+      )}
     </div>
   );
 }
 
+// Shows ALL pending months for a student, a combined total, and a polite
+// WhatsApp reminder covering the months you select (or all of them).
+function FeeDuesModal({ student, info, onClose, onChanged }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [selected, setSelected] = useState({}); // { 'YYYY-MM': true }
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setErr('');
+    try {
+      const r = await api.get('/fees/dues/' + student._id);
+      setData(r.data);
+      // default: all pending months selected
+      const sel = {};
+      (r.data.pending || []).forEach(p => { sel[p.month] = true; });
+      setSelected(sel);
+    } catch (e) { setErr(e.response?.data?.error || 'Could not load dues'); }
+  };
+  useEffect(() => { load(); }, [student._id]);
+
+  const toggle = (m) => setSelected(s => ({ ...s, [m]: !s[m] }));
+  const chosen = (data?.pending || []).filter(p => selected[p.month]);
+  const chosenTotal = chosen.reduce((a, p) => a + p.amount, 0);
+
+  const markMonthPaid = async (m) => {
+    setBusy(true);
+    try {
+      await api.post('/fees/mark-paid', { studentId: student._id, month: m.month, amount: m.amount });
+      await load();
+      if (onChanged) onChanged();
+    } catch (e) { alert('Failed: ' + (e.response?.data?.error || e.message)); }
+    finally { setBusy(false); }
+  };
+
+  const phone = student.parentPhone || data?.student?.parentPhone;
+
+  return (
+    <Modal onClose={onClose} title={`Pending Fees — ${student.name}`}>
+      {err && <div className="error-box">{err}</div>}
+      {!data ? <p className="muted">Loading…</p> : (
+        <div>
+          {data.pending.length === 0 ? (
+            <div className="empty" style={{ padding: 24 }}>
+              <CheckCircle size={40} color="#16a34a" />
+              <h3>All clear!</h3>
+              <p className="muted">No pending months for {student.name}.</p>
+            </div>
+          ) : (
+            <>
+              <p className="small muted" style={{ marginTop: 0 }}>
+                Monthly fee {formatRupee(data.monthlyFee)}. Tick the months to include in the reminder.
+                Carry-over works automatically: every unpaid month from joining until now is listed here.
+              </p>
+
+              <div className="list" style={{ marginBottom: 12 }}>
+                {data.pending.map(m => (
+                  <div key={m.month} className="history-row" style={{ alignItems: 'center' }}>
+                    <label className="checkbox-label" style={{ background: 'transparent', padding: 0, gap: 8 }}>
+                      <input type="checkbox" checked={!!selected[m.month]} onChange={() => toggle(m.month)} />
+                      <span><strong>{monthLabel(m.month)}</strong></span>
+                    </label>
+                    <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                      <strong>{formatRupee(m.amount)}</strong>
+                      <button className="btn btn-green btn-mini" disabled={busy} onClick={() => markMonthPaid(m)}>
+                        <Check size={12} /> Mark paid
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="info-card" style={{ background: '#fff7ed', borderColor: '#fed7aa' }}>
+                <div className="row" style={{ justifyContent: 'space-between', margin: 0 }}>
+                  <div>
+                    <strong>Total pending (all months)</strong>
+                    <p className="small muted" style={{ margin: 0 }}>{data.pendingCount} month{data.pendingCount !== 1 ? 's' : ''} unpaid</p>
+                  </div>
+                  <strong style={{ fontSize: 22, color: '#c2410c' }}>{formatRupee(data.total)}</strong>
+                </div>
+                <hr style={{ margin: '10px 0' }} />
+                <div className="row" style={{ justifyContent: 'space-between', margin: 0 }}>
+                  <span>Selected for reminder ({chosen.length})</span>
+                  <strong>{formatRupee(chosenTotal)}</strong>
+                </div>
+              </div>
+
+              <div className="modal-buttons" style={{ marginTop: 14 }}>
+                {phone ? (
+                  <a
+                    className={'btn btn-whatsapp' + (chosen.length ? '' : ' ')}
+                    target="_blank" rel="noreferrer"
+                    href={whatsappLink(phone, feeReminderMsg(data.student, chosen.length ? chosen : data.pending, chosen.length ? chosenTotal : data.total, info))}
+                    onClick={(e) => { if (!chosen.length) { /* allow: defaults to all */ } }}
+                  >
+                    <MessageCircle size={14} /> Send WhatsApp Reminder
+                  </a>
+                ) : (
+                  <span className="badge red small">⚠ No parent phone on file</span>
+                )}
+              </div>
+              <p className="small muted" style={{ marginTop: 6 }}>
+                The message politely lists each selected month and the combined total. If you tick nothing, it includes all pending months.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // Exams tab — teacher creates, sends to selected students
-function ExamsTab() {
+function ExamsTab({ info }) {
   const [exams, setExams] = useState([]);
   const [students, setStudents] = useState([]);
   const [showForm, setShowForm] = useState(false);
@@ -4563,6 +4764,7 @@ function ExamsTab() {
   const [allSelected, setAllSelected] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
+  const [sendExam, setSendExam] = useState(null); // exam being sent via WhatsApp
 
   const load = async () => {
     const [e, s] = await Promise.all([api.get('/exams'), api.get('/students')]);
@@ -4621,7 +4823,12 @@ function ExamsTab() {
                   {new Date(e.createdAt).toLocaleString()}
                 </p>
               </div>
-              <button className="icon-btn icon-btn-danger" onClick={() => del(e._id)}><Trash2 size={14} /></button>
+              <div className="row-buttons">
+                <button className="btn btn-whatsapp btn-mini" onClick={() => setSendExam(e)} title="Send details on WhatsApp">
+                  <MessageCircle size={12} /> Send
+                </button>
+                <button className="icon-btn icon-btn-danger" onClick={() => del(e._id)}><Trash2 size={14} /></button>
+              </div>
             </div>
           ))}
         </div>
@@ -4660,7 +4867,95 @@ function ExamsTab() {
           </button>
         </Modal>
       )}
+
+      {sendExam && (
+        <ExamWhatsAppModal exam={sendExam} students={students} info={info || {}} onClose={() => setSendExam(null)} />
+      )}
     </div>
+  );
+}
+
+// Pick recipients (all / by batch / specific students) and send each a polished
+// WhatsApp message with the full exam details + a motivational quote.
+function ExamWhatsAppModal({ exam, students, info, onClose }) {
+  const [mode, setMode] = useState('all');            // 'all' | 'batch' | 'pick'
+  const [batchSel, setBatchSel] = useState({});       // { batchId: true }  ('' = no batch)
+  const [pickSel, setPickSel] = useState({});         // { studentId: true }
+  const batches = info?.batches || [];
+
+  const toggleBatch = (id) => setBatchSel(s => ({ ...s, [id]: !s[id] }));
+  const togglePick = (id) => setPickSel(s => ({ ...s, [id]: !s[id] }));
+
+  let recipients = [];
+  if (mode === 'all') recipients = students;
+  else if (mode === 'batch') recipients = students.filter(s => batchSel[s.batchId || '']);
+  else recipients = students.filter(s => pickSel[s._id]);
+
+  const withPhone = recipients.filter(s => s.parentPhone || s.phone);
+  const withoutPhone = recipients.filter(s => !(s.parentPhone || s.phone));
+
+  return (
+    <Modal onClose={onClose} title={`Send "${exam.title}" on WhatsApp`}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Choose who to notify, then tap each green button to open WhatsApp with the message ready to send.
+        Each message includes the exam details and a motivational note.
+      </p>
+
+      <label>Send to</label>
+      <div className="radio-group">
+        <label className="radio-label"><input type="radio" checked={mode === 'all'} onChange={() => setMode('all')} /><span>All students</span></label>
+        {batches.length > 0 && <label className="radio-label"><input type="radio" checked={mode === 'batch'} onChange={() => setMode('batch')} /><span>By batch</span></label>}
+        <label className="radio-label"><input type="radio" checked={mode === 'pick'} onChange={() => setMode('pick')} /><span>Specific students</span></label>
+      </div>
+
+      {mode === 'batch' && (
+        <div className="chip-group" style={{ marginTop: 8 }}>
+          {batches.map(b => (
+            <button key={b._id} type="button" className={'chip-toggle' + (batchSel[b._id] ? ' on' : '')} onClick={() => toggleBatch(b._id)}>{b.name}</button>
+          ))}
+          <button type="button" className={'chip-toggle' + (batchSel[''] ? ' on' : '')} onClick={() => toggleBatch('')}>No batch</button>
+        </div>
+      )}
+
+      {mode === 'pick' && (
+        <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8, marginTop: 8 }}>
+          {students.map(s => (
+            <label key={s._id} className="checkbox-label" style={{ display: 'block', background: 'transparent' }}>
+              <input type="checkbox" checked={!!pickSel[s._id]} onChange={() => togglePick(s._id)} />
+              <span>{s.name} (Roll #{s.rollNumber}){!(s.parentPhone || s.phone) ? ' — no phone' : ''}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div className="info-card" style={{ marginTop: 12 }}>
+        <strong>{withPhone.length}</strong> recipient{withPhone.length !== 1 ? 's' : ''} ready
+        {withoutPhone.length > 0 && <span className="small muted"> · {withoutPhone.length} skipped (no phone)</span>}
+      </div>
+
+      {withPhone.length > 0 && (
+        <div className="list" style={{ maxHeight: 320, overflowY: 'auto', marginTop: 8 }}>
+          {withPhone.map((s, i) => (
+            <div key={s._id} className="history-row" style={{ alignItems: 'center' }}>
+              <div>
+                <strong>{s.name}</strong>
+                <p className="small muted" style={{ margin: 0 }}>Roll #{s.rollNumber}</p>
+              </div>
+              <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
+                href={whatsappLink(s.parentPhone || s.phone, examReminderMsg(s, exam, info, EXAM_QUOTES[i % EXAM_QUOTES.length]))}>
+                <MessageCircle size={12} /> WhatsApp
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {withoutPhone.length > 0 && (
+        <p className="small muted" style={{ marginTop: 8 }}>
+          No phone number: {withoutPhone.map(s => s.name).join(', ')}. Add a phone in the Students tab to include them.
+        </p>
+      )}
+    </Modal>
   );
 }
 
@@ -4853,7 +5148,7 @@ function TeacherFeesTab({ info }) {
 
 // Shows who has paid fees this month
 function PaidFeesTab() {
-  const [month, setMonth] = useState(new Date().toISOString().substring(0, 7));
+  const [month, setMonth] = useState(thisMonth());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewingStudent, setViewingStudent] = useState(null);
