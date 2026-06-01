@@ -21,7 +21,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
 app.use(compression()); // gzip all responses — big speed win on slow connections
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' })); // base64 voice notes (~1MB) + images need more than the 100KB default
 
 // ===========================
 // TIMEZONE HELPERS (fix wrong check-in/out times)
@@ -718,6 +718,18 @@ app.get('/api/attendance/summary-all', authenticate, teacherOnly, async (req, re
   }
 });
 
+// Attendance for ANY single date (teacher) — powers the "edit past date" feature.
+app.get('/api/attendance/by-date', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const day = req.query.date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day || '')) return res.status(400).json({ error: 'Invalid date (use YYYY-MM-DD)' });
+    const attendance = await Attendance.find({ date: day });
+    res.json(attendance);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Student or teacher check-in/check-out.
 app.post('/api/attendance/check', authenticate, async (req, res) => {
   try {
@@ -856,18 +868,22 @@ app.post('/api/attendance/teacher-mark', authenticate, teacherOnly, async (req, 
 
 app.post('/api/attendance/mark-all-present', authenticate, teacherOnly, async (req, res) => {
   try {
-    const today = istDateISO();
-    const { batchId } = req.body || {};
+    const { batchId, className, date } = req.body || {};
+    const day = date || istDateISO();
     const config = await Config.findOne();
-    const filter = {};
+    // Only approved students, respecting whichever filters are active.
+    const filter = { pendingApproval: { $ne: true } };
     if (batchId) filter.batchId = batchId;
+    if (className) filter.className = className;
     const students = await Student.find(filter);
-    let marked = 0;
+    let marked = 0, skipped = 0;
     for (const s of students) {
-      let att = await Attendance.findOne({ studentId: s._id, date: today });
+      // Don't create attendance for days before a student enrolled.
+      if (s.enrollmentDate && /^\d{4}-\d{2}-\d{2}$/.test(s.enrollmentDate) && s.enrollmentDate > day) { skipped++; continue; }
+      let att = await Attendance.findOne({ studentId: s._id, date: day });
       if (att && att.status === 'present') continue;
       if (!att) {
-        att = new Attendance({ studentId: s._id, date: today });
+        att = new Attendance({ studentId: s._id, date: day });
       }
       let inT = config?.classStart || '09:00';
       let outT = config?.classEnd || '17:00';
@@ -883,7 +899,7 @@ app.post('/api/attendance/mark-all-present', authenticate, teacherOnly, async (r
       await att.save();
       marked++;
     }
-    res.json({ ok: true, marked });
+    res.json({ ok: true, marked, skipped });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1046,10 +1062,65 @@ app.get('/api/fees/student/:id', authenticate, async (req, res) => {
   }
 });
 
-app.get('/api/fees/summary', authenticate, teacherOnly, async (req, res) => {
+// All unpaid months for a student (enrollment month → current), with running total.
+// Powers the "carry-over pending fees" reminder.
+app.get('/api/fees/dues/:id', authenticate, async (req, res) => {
   try {
-    const yyyymm = req.query.month || istDateISO().substring(0, 7);
-    const students = await Student.find().sort({ name: 1 });
+    if (!parentScopeCheck(req, req.params.id)) return res.status(403).json({ error: 'Forbidden' });
+    const student = await Student.findById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Not found' });
+    const monthlyFee = Number(student.monthlyFee) || 0;
+
+    // Range: from enrollment month to current month (inclusive).
+    const nowYM = istDateISO().substring(0, 7);
+    let startYM = (student.enrollmentDate || '').substring(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(startYM)) {
+      const j = student.joinDate ? new Date(student.joinDate) : new Date();
+      startYM = `${j.getFullYear()}-${String(j.getMonth() + 1).padStart(2, '0')}`;
+    }
+    // Build month list start..now
+    const months = [];
+    let [sy, sm] = startYM.split('-').map(Number);
+    const [ny, nm] = nowYM.split('-').map(Number);
+    // Safety cap of 60 months to avoid runaway loops on bad data.
+    let guard = 0;
+    while ((sy < ny || (sy === ny && sm <= nm)) && guard < 60) {
+      months.push(`${sy}-${String(sm).padStart(2, '0')}`);
+      sm++; if (sm > 12) { sm = 1; sy++; }
+      guard++;
+    }
+
+    const payments = await FeePayment.find({ studentId: student._id });
+    const paidSet = new Set(payments.map(p => p.month));
+
+    const pending = [];
+    let total = 0;
+    if (monthlyFee > 0) {
+      for (const m of months) {
+        if (!paidSet.has(m)) {
+          pending.push({ month: m, amount: monthlyFee });
+          total += monthlyFee;
+        }
+      }
+    }
+
+    res.json({
+      student: { _id: student._id, name: student.name, rollNumber: student.rollNumber, parentName: student.parentName, parentPhone: student.parentPhone, className: student.className },
+      monthlyFee,
+      dueDay: student.feeDueDay || 5,
+      pending,           // [{month, amount}] oldest→newest
+      total,             // sum of all pending
+      pendingCount: pending.length,
+      paidMonths: [...paidSet].sort(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/fees/summary', authenticate, teacherOnly, async (req, res) => {
+  try {    const yyyymm = req.query.month || istDateISO().substring(0, 7);
+    const students = await Student.find({ pendingApproval: { $ne: true } }).sort({ name: 1 });
     const config = await Config.findOne();
     const rows = students.map(s => {
       const fees = computeStudentFees(s, config, yyyymm);
@@ -1415,6 +1486,175 @@ app.get('/api/attendance/months', authenticate, teacherOnly, async (req, res) =>
   }
 });
 
+// ===========================
+// PROFESSIONAL EXCEL EXPORT (styled, colored, easy to read)
+// Streams a real .xlsx built with ExcelJS. Loaded on demand.
+// ===========================
+app.get('/api/export/excel', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : istDateISO().substring(0, 7);
+    const ExcelJS = (await import('exceljs')).default;
+
+    const [students, records, payments, config] = await Promise.all([
+      Student.find({ pendingApproval: { $ne: true } }).sort({ rollNumber: 1 }).lean(),
+      Attendance.find({ date: { $regex: '^' + month } }).lean(),
+      FeePayment.find({ month }).lean(),
+      Config.findOne().lean(),
+    ]);
+    const studentMap = {};
+    students.forEach(s => { studentMap[String(s._id)] = s; });
+    const batchName = (id) => (config?.batches || []).find(b => String(b._id) === String(id))?.name || '';
+    const payMap = {};
+    payments.forEach(p => { payMap[String(p.studentId)] = p; });
+
+    // Pretty month label e.g. "May 2026"
+    const [yy, mm] = month.split('-').map(Number);
+    const monthLabel = new Date(yy, mm - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = config?.classroomName || 'Coaching';
+    wb.created = new Date();
+
+    // ---- shared styles ----
+    const BRAND = 'FF1D4ED8';      // blue
+    const BRAND_DARK = 'FF1E3A8A';
+    const GREEN = 'FF16A34A';
+    const RED = 'FFDC2626';
+    const AMBER = 'FFD97706';
+    const LIGHT = 'FFF1F5F9';
+    const thin = { style: 'thin', color: { argb: 'FFCBD5E1' } };
+    const allBorders = { top: thin, left: thin, bottom: thin, right: thin };
+
+    const styleHeader = (row) => {
+      row.eachCell(c => {
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BRAND } };
+        c.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+        c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        c.border = allBorders;
+      });
+      row.height = 22;
+    };
+    const zebra = (ws, startRow, cols) => {
+      for (let r = startRow; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r);
+        if ((r - startRow) % 2 === 1) {
+          for (let cI = 1; cI <= cols; cI++) {
+            const cell = row.getCell(cI);
+            if (!cell.fill || cell.fill.type !== 'pattern' || cell.fill.fgColor?.argb === undefined) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+            }
+          }
+        }
+        for (let cI = 1; cI <= cols; cI++) row.getCell(cI).border = allBorders;
+      }
+    };
+    const titleBlock = (ws, title, span) => {
+      ws.mergeCells(1, 1, 1, span);
+      const t = ws.getCell(1, 1);
+      t.value = (config?.classroomName || 'Coaching Center');
+      t.font = { bold: true, size: 16, color: { argb: BRAND_DARK } };
+      t.alignment = { vertical: 'middle', horizontal: 'left' };
+      ws.getRow(1).height = 26;
+      ws.mergeCells(2, 1, 2, span);
+      const s = ws.getCell(2, 1);
+      s.value = title;
+      s.font = { size: 11, italic: true, color: { argb: 'FF475569' } };
+      ws.getRow(2).height = 18;
+      ws.addRow([]); // spacer row 3
+    };
+
+    // ============ SHEET 1: STUDENTS ============
+    const ws1 = wb.addWorksheet('Students', { views: [{ state: 'frozen', ySplit: 5 }] });
+    titleBlock(ws1, `Student List · ${students.length} students`, 8);
+    const h1 = ws1.addRow(['Roll #', 'Name', 'Class', 'Batch', 'Phone', 'Parent', 'Parent Phone', 'Monthly Fee']);
+    styleHeader(h1);
+    students.forEach(s => {
+      const row = ws1.addRow([
+        s.rollNumber || '', s.name || '', s.className || '', batchName(s.batchId),
+        s.phone || '', s.parentName || '', s.parentPhone || '', Number(s.monthlyFee) || 0,
+      ]);
+      row.getCell(8).numFmt = '"₹"#,##0';
+      row.getCell(1).alignment = { horizontal: 'center' };
+    });
+    ws1.columns = [{ width: 9 }, { width: 22 }, { width: 10 }, { width: 16 }, { width: 15 }, { width: 20 }, { width: 15 }, { width: 14 }];
+    zebra(ws1, 6, 8);
+
+    // ============ SHEET 2: ATTENDANCE ============
+    const ws2 = wb.addWorksheet(`Attendance`, { views: [{ state: 'frozen', ySplit: 5 }] });
+    titleBlock(ws2, `Attendance · ${monthLabel}`, 8);
+    const h2 = ws2.addRow(['Date', 'Day', 'Roll #', 'Name', 'Class', 'Status', 'In', 'Out']);
+    styleHeader(h2);
+    const sorted = [...records].sort((a, b) => a.date.localeCompare(b.date) || (studentMap[String(a.studentId)]?.rollNumber || '').localeCompare(studentMap[String(b.studentId)]?.rollNumber || ''));
+    sorted.forEach(r => {
+      const st = studentMap[String(r.studentId)] || {};
+      const dObj = new Date(r.date + 'T00:00:00');
+      const row = ws2.addRow([
+        r.date,
+        dObj.toLocaleDateString('en-US', { weekday: 'short' }),
+        st.rollNumber || '',
+        st.studentName || st.name || 'Unknown',
+        st.className || '',
+        r.status === 'present' ? 'Present' : 'Absent',
+        r.inTime || '', r.outTime || '',
+      ]);
+      const statusCell = row.getCell(6);
+      statusCell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      statusCell.alignment = { horizontal: 'center' };
+      statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: r.status === 'present' ? GREEN : RED } };
+      row.getCell(1).alignment = { horizontal: 'center' };
+      row.getCell(3).alignment = { horizontal: 'center' };
+    });
+    if (!sorted.length) { const e = ws2.addRow(['—', '', '', 'No attendance records for this month', '', '', '', '']); ws2.mergeCells(e.number, 4, e.number, 8); }
+    ws2.columns = [{ width: 13 }, { width: 7 }, { width: 9 }, { width: 22 }, { width: 10 }, { width: 11 }, { width: 8 }, { width: 8 }];
+    zebra(ws2, 6, 8);
+
+    // ============ SHEET 3: FEES ============
+    const ws3 = wb.addWorksheet('Fees', { views: [{ state: 'frozen', ySplit: 5 }] });
+    titleBlock(ws3, `Fees · ${monthLabel}`, 7);
+    const h3 = ws3.addRow(['Roll #', 'Name', 'Class', 'Monthly Fee', 'Status', 'Paid On', 'Note']);
+    styleHeader(h3);
+    let collected = 0, pendingAmt = 0;
+    students.filter(s => Number(s.monthlyFee) > 0).forEach(s => {
+      const pay = payMap[String(s._id)];
+      const isPaid = !!pay;
+      if (isPaid) collected += (pay.amount || s.monthlyFee || 0); else pendingAmt += Number(s.monthlyFee) || 0;
+      const row = ws3.addRow([
+        s.rollNumber || '', s.name || '', s.className || '',
+        Number(s.monthlyFee) || 0,
+        isPaid ? 'PAID' : 'PENDING',
+        pay?.paidOn ? new Date(pay.paidOn).toLocaleDateString('en-IN') : '',
+        pay?.note || '',
+      ]);
+      row.getCell(4).numFmt = '"₹"#,##0';
+      const stc = row.getCell(5);
+      stc.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      stc.alignment = { horizontal: 'center' };
+      stc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isPaid ? GREEN : AMBER } };
+      row.getCell(1).alignment = { horizontal: 'center' };
+    });
+    // totals row
+    ws3.addRow([]);
+    const totalRow = ws3.addRow(['', 'TOTAL', '', collected + pendingAmt, '', '', '']);
+    totalRow.getCell(2).font = { bold: true };
+    totalRow.getCell(4).numFmt = '"₹"#,##0';
+    totalRow.getCell(4).font = { bold: true };
+    const cRow = ws3.addRow(['', 'Collected', '', collected, '', '', '']);
+    cRow.getCell(4).numFmt = '"₹"#,##0'; cRow.getCell(2).font = { color: { argb: GREEN }, bold: true }; cRow.getCell(4).font = { color: { argb: GREEN }, bold: true };
+    const pRow = ws3.addRow(['', 'Pending', '', pendingAmt, '', '', '']);
+    pRow.getCell(4).numFmt = '"₹"#,##0'; pRow.getCell(2).font = { color: { argb: AMBER }, bold: true }; pRow.getCell(4).font = { color: { argb: AMBER }, bold: true };
+    ws3.columns = [{ width: 9 }, { width: 22 }, { width: 10 }, { width: 14 }, { width: 11 }, { width: 14 }, { width: 24 }];
+    zebra(ws3, 6, 7);
+
+    const safeName = (config?.classroomName || 'Coaching').replace(/[^A-Za-z0-9]/g, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_${month}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Teacher can hard-delete any group chat message
 app.delete('/api/chat/messages/:id', authenticate, teacherOnly, async (req, res) => {
   try {
@@ -1470,8 +1710,7 @@ app.get('/api/fees/pending', authenticate, teacherOnly, async (req, res) => {
     const students = await Student.find({ pendingApproval: { $ne: true }, monthlyFee: { $gt: 0 } }).select('name rollNumber monthlyFee feeDueDay parentPhone parentName photo className');
     const paid = await FeePayment.find({ month: yyyymm });
     const paidIds = new Set(paid.map(p => String(p.studentId)));
-    const today = new Date();
-    const todayDay = today.getDate();
+    const todayDay = Number(istDateISO().substring(8, 10)); // IST day-of-month
     const pending = students
       .filter(s => !paidIds.has(String(s._id)))
       .map(s => ({
@@ -1535,8 +1774,7 @@ app.get('/api/fees/my-status', authenticate, async (req, res) => {
     if (!s || !s.monthlyFee || s.monthlyFee <= 0) return res.json({ hasFee: false });
     const yyyymm = istDateISO().substring(0, 7);
     const paid = await FeePayment.findOne({ studentId: s._id, month: yyyymm });
-    const today = new Date();
-    const todayDay = today.getDate();
+    const todayDay = Number(istDateISO().substring(8, 10)); // IST day-of-month
     const dueDay = s.feeDueDay || 5;
     const daysUntilDue = dueDay - todayDay; // negative if overdue
     res.json({
