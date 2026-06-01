@@ -905,7 +905,35 @@ app.post('/api/attendance/mark-all-present', authenticate, teacherOnly, async (r
   }
 });
 
-// --- UNDO / UNMARK -----------------------------------------------------------
+// Mark everyone who is NOT yet marked for a day as absent (one-tap "fill the rest").
+// Only touches students with no record yet — never overwrites present/absent.
+// Respects batch/class filters, excludes pending students, skips pre-enrollment days.
+app.post('/api/attendance/mark-rest-absent', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const { batchId, className, date, reason } = req.body || {};
+    const day = date || istDateISO();
+    const filter = { pendingApproval: { $ne: true } };
+    if (batchId) filter.batchId = batchId;
+    if (className) filter.className = className;
+    const students = await Student.find(filter);
+    const existing = await Attendance.find({ date: day }).select('studentId').lean();
+    const haveRecord = new Set(existing.map(a => String(a.studentId)));
+    let marked = 0, skipped = 0;
+    for (const s of students) {
+      if (haveRecord.has(String(s._id))) { skipped++; continue; } // already present or absent
+      if (s.enrollmentDate && /^\d{4}-\d{2}-\d{2}$/.test(s.enrollmentDate) && s.enrollmentDate > day) { skipped++; continue; }
+      const att = new Attendance({
+        studentId: s._id, date: day, status: 'absent',
+        markedBy: 'teacher', reason: (reason || '').trim() || 'Not marked present',
+      });
+      await att.save();
+      marked++;
+    }
+    res.json({ ok: true, marked, skipped });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // Student can undo their own self check-in for today (rule: only same day, only self-marked).
 app.post('/api/attendance/undo-self', authenticate, async (req, res) => {
   try {
@@ -1707,7 +1735,7 @@ app.get('/api/students/:id/profile', authenticate, async (req, res) => {
 app.get('/api/fees/pending', authenticate, teacherOnly, async (req, res) => {
   try {
     const yyyymm = req.query.month || istDateISO().substring(0, 7);
-    const students = await Student.find({ pendingApproval: { $ne: true }, monthlyFee: { $gt: 0 } }).select('name rollNumber monthlyFee feeDueDay parentPhone parentName photo className');
+    const students = await Student.find({ pendingApproval: { $ne: true }, monthlyFee: { $gt: 0 } }).select('name rollNumber monthlyFee feeDueDay parentPhone parentName photo className batchId');
     const paid = await FeePayment.find({ month: yyyymm });
     const paidIds = new Set(paid.map(p => String(p.studentId)));
     const todayDay = Number(istDateISO().substring(8, 10)); // IST day-of-month
@@ -1761,6 +1789,18 @@ app.post('/api/fees/mark-paid', authenticate, teacherOnly, async (req, res) => {
     const payment = new FeePayment({ studentId, month, amount, note });
     await payment.save();
     res.json({ ok: true, payment });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Roll back a fee payment marked by mistake — removes the paid record for that month.
+app.post('/api/fees/unmark-paid', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const { studentId, month } = req.body;
+    if (!studentId || !month) return res.status(400).json({ error: 'studentId and month required' });
+    const result = await FeePayment.deleteOne({ studentId, month });
+    res.json({ ok: true, removed: result.deletedCount || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
