@@ -2163,3 +2163,43 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* Date selector bar in Today tab (past-date attendance editing) */
 .date-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px 12px; background: #fff; border: 1px solid #e7e2da; border-radius: 10px; }
+
+/* ===== Expandable cards (Today + Fees) & attendance-rate clarity ===== */
+/* "Not marked" stat colour + plain-language caption under the calendar */
+.att-stat.gray strong { color: #6b7280; }
+.att-rate-note {
+  font-size: 12.5px;
+  color: #6b7280;
+  line-height: 1.55;
+  background: #f8fafc;
+  border: 1px solid #eef0f3;
+  border-radius: 8px;
+  padding: 8px 11px;
+  margin: -6px 0 16px;
+}
+
+/* Wrappers hold the card + its expand panel; parent flex gap spaces wrappers */
+.attendance-card-wrap, .pending-fee-row-wrap { display: block; }
+
+/* Chevron that rotates when a card is expanded */
+.expand-chevron {
+  color: #9ca3af;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.expand-chevron.open { transform: rotate(180deg); color: #c2410c; }
+
+/* The detail panel revealed under a Today / Fees card */
+.att-expand, .fee-expand {
+  background: #f9f7f4;
+  border: 1px solid #e7e2da;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 6px;
+  animation: feeExpandIn 0.14s ease;
+}
+@keyframes feeExpandIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.att-expand .info-dl, .fee-expand .info-dl { margin: 0; }
