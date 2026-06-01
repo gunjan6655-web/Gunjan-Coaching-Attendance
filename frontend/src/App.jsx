@@ -3,7 +3,7 @@ import {
   GraduationCap, LogIn, LogOut, User, Users, UserPlus,
   Calendar, CalendarOff, Clock, Phone, Mail, MapPin,
   Plus, Trash2, Edit2, Save, X, Search,
-  ChevronRight, ArrowLeft, CheckCircle, XCircle,
+  ChevronRight, ChevronDown, ArrowLeft, CheckCircle, XCircle,
   AlertTriangle, Info, BarChart3, MessageSquare, Send,
   Megaphone, Eye, EyeOff, BookOpen, Settings,
   Cake, Share2, MessageCircle, CalendarDays, Copy,
@@ -105,12 +105,12 @@ const mergeMessages = (existing, incoming) => {
   return add.length ? [...existing, ...add] : existing;
 };
 
-// Polite, respectful WhatsApp reminder for an absent student.
+// Polite, respectful WhatsApp reminder for an absent student — asks the reason.
 const absentReminderMsg = (s, dateISO, info) => {
   const teacher = info?.teacherName || 'your teacher';
   const place = info?.classroomName || 'the coaching center';
   const greet = s?.parentName ? `Dear ${s.parentName}` : 'Dear Parent';
-  return `${greet},\n\nThis is ${teacher} from ${place}. We noticed that ${s?.name} (Roll #${s?.rollNumber}) was marked absent on ${formatDate(dateISO)}.\n\nWe hope everything is alright. If there's anything we should know, please feel free to let us know. We look forward to seeing ${s?.name} back in class soon.\n\nWarm regards,\n${teacher}`;
+  return `${greet},\n\nThis is ${teacher} from ${place}. We noticed that ${s?.name} (Roll #${s?.rollNumber}) was absent on ${formatDate(dateISO)}.\n\nWe hope everything is alright. Could you please let us know the reason for the absence? If ${s?.name} is unwell or facing any difficulty, do tell us so we can help. We look forward to seeing ${s?.name} back in class soon.\n\nWarm regards,\n${teacher}`;
 };
 
 // Month label like "May 2026" from a YYYY-MM string.
@@ -974,6 +974,10 @@ function TodayTab({ info, announcements }) {
   const [studentMode, setStudentMode] = useState(false);
   const [studentModeDone, setStudentModeDone] = useState(null);
   const [date, setDate] = useState(todayISO());        // which day we're viewing/editing
+  const [search, setSearch] = useState('');            // filter the list by name / roll
+  const [expandedId, setExpandedId] = useState(null);  // which student card is expanded
+  const [notifyOpen, setNotifyOpen] = useState(false); // batch WhatsApp broadcast modal
+  const [restLoading, setRestLoading] = useState(false);
   const isToday = date === todayISO();
 
   const load = async () => {
@@ -1065,6 +1069,29 @@ function TodayTab({ info, announcements }) {
       .finally(() => setBulkLoading(false));
   };
 
+  // Mark everyone still unmarked as absent (one-tap "fill the rest"). Never touches
+  // students already marked present/absent.
+  const markRestAbsent = async () => {
+    const unmarkedNow = visible.filter(s => !getAtt(s._id));
+    if (unmarkedNow.length === 0) { alert('Everyone shown is already marked.'); return; }
+    const when = isToday ? 'today' : `on ${formatDate(date)}`;
+    if (!confirm(`Mark the ${unmarkedNow.length} unmarked student${unmarkedNow.length !== 1 ? 's' : ''} as ABSENT ${when}? Students already marked present or absent are left unchanged.`)) return;
+    setRestLoading(true);
+    setTodayAtt(prev => {
+      const toAdd = unmarkedNow.map(s => ({ _id: 'opt_' + s._id, studentId: s._id, status: 'absent', markedBy: 'teacher', reason: 'Not marked present', date }));
+      return [...prev, ...toAdd];
+    });
+    const body = {
+      ...(batchFilter ? { batchId: batchFilter } : {}),
+      ...(classFilter ? { className: classFilter } : {}),
+      date,
+    };
+    api.post('/attendance/mark-rest-absent', body)
+      .then(() => load())
+      .catch(err => { load(); alert('Failed: ' + err.message); })
+      .finally(() => setRestLoading(false));
+  };
+
   if (loading) return <p className="muted">Loading...</p>;
 
   // STUDENT MODE — teacher hands the device over.
@@ -1093,8 +1120,10 @@ function TodayTab({ info, announcements }) {
   }
 
   const allClasses = [...new Set(students.map(s => s.className).filter(Boolean))].sort();
+  const q = search.trim().toLowerCase();
   const visible = [...students]
     .filter(s => (!batchFilter || s.batchId === batchFilter) && (!classFilter || s.className === classFilter))
+    .filter(s => !q || s.name.toLowerCase().includes(q) || String(s.rollNumber || '').toLowerCase().includes(q))
     .sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
   const birthdayStudents = visible.filter(s => isBirthdayToday(s.birthday));
   const upcomingBirthdays = visible
@@ -1187,6 +1216,11 @@ function TodayTab({ info, announcements }) {
       )}
 
       <div className="toolbar">
+        <div className="search-bar" style={{ flex: '1 1 180px', minWidth: 160 }}>
+          <Search size={16} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or roll" />
+          {search && <button className="btn-link small" onClick={() => setSearch('')} title="Clear">✕</button>}
+        </div>
         {(info.batches?.length || 0) > 0 && (
           <select className="sort-select" value={batchFilter} onChange={e => setBatchFilter(e.target.value)}>
             <option value="">All batches</option>
@@ -1204,6 +1238,12 @@ function TodayTab({ info, announcements }) {
             <CheckCircle size={16} /> {bulkLoading ? 'Marking...' : ((batchFilter || classFilter) ? 'Mark Shown Present' : 'Mark Everyone Present')}
           </button>
         )}
+        <button className="btn btn-outline" onClick={markRestAbsent} disabled={restLoading} title="Mark everyone not yet marked as absent">
+          <XCircle size={16} /> {restLoading ? 'Marking...' : 'Mark Rest Absent'}
+        </button>
+        <button className="btn btn-whatsapp" onClick={() => setNotifyOpen(true)} title="Send a WhatsApp message to a whole batch / class">
+          <MessageCircle size={16} /> Message Parents
+        </button>
         {isToday && (
           <button className="btn btn-outline" onClick={() => setStudentMode(true)} title="Let a student mark themselves on this device">
             <User size={16} /> Hand to Student
@@ -1215,13 +1255,16 @@ function TodayTab({ info, announcements }) {
         {visible.map(s => {
           const att = getAtt(s._id);
           const batch = findBatch(info, s.batchId);
+          const expanded = expandedId === s._id;
           return (
-            <div key={s._id} className="attendance-card">
-              <div className="row" style={{ gap: 10, alignItems: 'center', flex: 1 }}>
+            <div key={s._id} className={'attendance-card-wrap' + (expanded ? ' expanded' : '')}>
+            <div className="attendance-card">
+              <div className="row att-card-main" style={{ gap: 10, alignItems: 'center', flex: 1, cursor: 'pointer' }}
+                onClick={() => setExpandedId(expanded ? null : s._id)} title="Tap for details">
                 {s.photo
                   ? <img src={s.photo} alt={s.name} className="att-avatar" />
                   : <div className="att-avatar placeholder"><User size={16} /></div>}
-                <div>
+                <div style={{ flex: 1 }}>
                   <strong>{s.name}</strong>
                   {isBirthdayToday(s.birthday) && <span className="bday-pill">🎂 Birthday!</span>}
                   <p className="muted small">
@@ -1230,6 +1273,7 @@ function TodayTab({ info, announcements }) {
                     {s.className ? ` · ${s.className}` : ''}
                   </p>
                 </div>
+                <ChevronDown size={16} className={'expand-chevron' + (expanded ? ' open' : '')} />
               </div>
               <div className="attendance-status">
                 {att ? (
@@ -1254,8 +1298,8 @@ function TodayTab({ info, announcements }) {
                       (s.parentPhone || s.phone) ? (
                         <a className="btn-mini btn-whatsapp" target="_blank" rel="noreferrer"
                           href={whatsappLink(s.parentPhone || s.phone, absentReminderMsg(s, date, info))}
-                          title="Send a polite WhatsApp reminder">
-                          <MessageCircle size={14} /> Remind
+                          title="Send a polite WhatsApp message asking why they were absent">
+                          <MessageCircle size={14} /> Ask reason
                         </a>
                       ) : (
                         <span className="badge red small" title="No phone number on file">⚠ No phone</span>
@@ -1274,9 +1318,38 @@ function TodayTab({ info, announcements }) {
                 )}
               </div>
             </div>
+            {expanded && (
+              <div className="att-expand">
+                <dl className="info-dl">
+                  {s.className && <><dt>Class</dt><dd>{s.className}</dd></>}
+                  {batch && <><dt>Batch</dt><dd>{batch.name} ({batch.startTime}–{batch.endTime})</dd></>}
+                  {Number(s.monthlyFee) > 0 && <><dt>Monthly fee</dt><dd>{formatRupee(s.monthlyFee)}</dd></>}
+                  {s.phone && <><dt>Student phone</dt><dd>{s.phone}</dd></>}
+                  {s.parentName && <><dt>Parent</dt><dd>{s.parentName}</dd></>}
+                  {s.parentPhone && <><dt>Parent phone</dt><dd>{s.parentPhone}</dd></>}
+                  {s.birthday && <><dt>Date of birth</dt><dd>{s.birthday}{ageFromDOB(s.birthday) != null ? ` (Age ${ageFromDOB(s.birthday)})` : ''}</dd></>}
+                  {s.enrollmentDate && <><dt>Enrolled</dt><dd>{s.enrollmentDate}</dd></>}
+                  {s.subjects?.length > 0 && <><dt>Subjects</dt><dd>{s.subjects.join(', ')}</dd></>}
+                  {att?.note && <><dt>Today's note</dt><dd>"{att.note}"</dd></>}
+                </dl>
+                <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                  {s.parentPhone && (
+                    <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
+                      href={whatsappLink(s.parentPhone, `Hello${s.parentName ? ' ' + s.parentName : ''}, this is ${info.teacherName || 'your teacher'} from ${info.classroomName || 'the coaching center'} regarding ${s.name}.`)}>
+                      <MessageCircle size={12} /> Message parent
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+            </div>
           );
         })}
       </div>
+
+      {notifyOpen && (
+        <BatchNotifyModal students={students} info={info} onClose={() => setNotifyOpen(false)} />
+      )}
 
       {markingStudent && (
         <Modal onClose={() => setMarkingStudent(null)} title={`Mark ${markingStudent.name} Absent`}>
@@ -2008,8 +2081,14 @@ function AttendanceGraph({ history, month }) {
       <div className="att-graph-summary">
         <div className="att-stat green"><strong>{present}</strong><span>Present</span></div>
         <div className="att-stat red"><strong>{absent}</strong><span>Absent</span></div>
+        <div className="att-stat gray"><strong>{unmarked}</strong><span>Not marked</span></div>
         <div className="att-stat blue"><strong>{pct}%</strong><span>Rate</span></div>
       </div>
+      <p className="att-rate-note">
+        Rate counts only the {total} day{total !== 1 ? 's' : ''} actually marked
+        ({present} present, {absent} absent){unmarked > 0 ? `, so the ${unmarked} unmarked day${unmarked !== 1 ? 's' : ''} this month ${unmarked !== 1 ? 'are' : 'is'} not included.` : '.'}
+        {unmarked > 0 && absent === 0 ? ' To make this honest, mark the missed days absent from the Today tab (pick the date → “Mark Rest Absent”).' : ''}
+      </p>
       <div className="att-cal">
         {dayLabels.map((d, i) => <div key={'dl' + i} className="att-cal-label">{d}</div>)}
         {cells.map((c, i) => {
@@ -4553,6 +4632,7 @@ function PendingFeesTab({ info }) {
   const [marking, setMarking] = useState(null);
   const [viewingStudent, setViewingStudent] = useState(null);
   const [duesFor, setDuesFor] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -4597,19 +4677,27 @@ function PendingFeesTab({ info }) {
       {data?.pending?.length === 0 ? (
         <div className="empty"><CheckCircle size={48} color="#16a34a" /><h3>All fees collected!</h3><p className="muted">Everyone has paid this month.</p></div>
       ) : (
+        <>
+        <p className="small muted" style={{ margin: '4px 0 8px' }}>
+          Tap a student to see details. <strong>Dues</strong> shows every unpaid month with a combined total and a WhatsApp reminder.
+        </p>
         <div className="pending-fees-list">
-          {data?.pending?.map(s => (
-            <div key={s._id} className={'pending-fee-row' + (s.overdue ? ' overdue' : '')}>
-              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1, cursor: 'pointer' }} onClick={() => setViewingStudent(s)}>
+          {data?.pending?.map(s => {
+            const expanded = expandedId === s._id;
+            const batch = findBatch(info, s.batchId);
+            return (
+            <div key={s._id} className={'pending-fee-row-wrap' + (expanded ? ' expanded' : '')}>
+            <div className={'pending-fee-row' + (s.overdue ? ' overdue' : '')}>
+              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1, cursor: 'pointer' }} onClick={() => setExpandedId(expanded ? null : s._id)} title="Tap for details">
                 {s.photo ? <img src={s.photo} alt="" className="student-avatar" /> : <div className="student-avatar placeholder"><User size={20} /></div>}
-                <div>
+                <div style={{ flex: 1 }}>
                   <strong>{s.name}</strong>
                   <p className="small muted" style={{ margin: '2px 0 0' }}>
                     Roll #{s.rollNumber} · {formatRupee(s.monthlyFee)} · Due day {s.dueDay}
                     {s.overdue && <span className="badge red small" style={{ marginLeft: 8 }}>OVERDUE</span>}
                   </p>
-                  <p className="small muted" style={{ margin: 0 }}><Eye size={10} /> Tap for details</p>
                 </div>
+                <ChevronDown size={16} className={'expand-chevron' + (expanded ? ' open' : '')} />
               </div>
               <div className="row" style={{ gap: 6 }}>
                 <button className="btn btn-outline btn-mini" onClick={() => setDuesFor(s)} title="See all pending months and send a combined reminder">
@@ -4630,8 +4718,32 @@ function PendingFeesTab({ info }) {
                 </button>
               </div>
             </div>
-          ))}
+            {expanded && (
+              <div className="fee-expand">
+                <dl className="info-dl">
+                  {s.className && <><dt>Class</dt><dd>{s.className}</dd></>}
+                  {batch && <><dt>Batch</dt><dd>{batch.name}</dd></>}
+                  <dt>Monthly fee</dt><dd>{formatRupee(s.monthlyFee)}</dd>
+                  <dt>Due day</dt><dd>Day {s.dueDay} of the month</dd>
+                  <dt>Status ({month})</dt><dd>{s.overdue ? 'Overdue' : 'Pending'}</dd>
+                  {s.parentName && <><dt>Parent</dt><dd>{s.parentName}</dd></>}
+                  {s.parentPhone && <><dt>Parent phone</dt><dd>{s.parentPhone}</dd></>}
+                </dl>
+                <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-outline btn-mini" onClick={() => setViewingStudent(s)}>
+                    <Eye size={12} /> Full profile
+                  </button>
+                  <button className="btn btn-outline btn-mini" onClick={() => setDuesFor(s)}>
+                    <Wallet size={12} /> All pending months
+                  </button>
+                </div>
+              </div>
+            )}
+            </div>
+            );
+          })}
         </div>
+        </>
       )}
       {viewingStudent && (
         <StudentDetailModal student={viewingStudent} info={info || {}} onClose={() => setViewingStudent(null)} onEdit={() => setViewingStudent(null)} />
@@ -4959,6 +5071,126 @@ function ExamWhatsAppModal({ exam, students, info, onClose }) {
   );
 }
 
+// Send a free-form WhatsApp message to a whole batch, a class, or everyone.
+// One-by-one (WhatsApp has no true broadcast via wa.me), so each recipient gets
+// a green button that opens WhatsApp with the message ready to send.
+function BatchNotifyModal({ students, info, onClose }) {
+  const [mode, setMode] = useState('batch');          // 'all' | 'batch' | 'class' | 'pick'
+  const [batchSel, setBatchSel] = useState({});       // { batchId: true } ('' = no batch)
+  const [classSel, setClassSel] = useState({});       // { className: true }
+  const [pickSel, setPickSel] = useState({});         // { studentId: true }
+  const [body, setBody] = useState('');
+  const batches = info?.batches || [];
+  const classes = [...new Set((students || []).map(s => s.className).filter(Boolean))].sort();
+
+  const toggle = (setter) => (id) => setter(s => ({ ...s, [id]: !s[id] }));
+
+  let recipients = [];
+  if (mode === 'all') recipients = students;
+  else if (mode === 'batch') recipients = students.filter(s => batchSel[s.batchId || '']);
+  else if (mode === 'class') recipients = students.filter(s => classSel[s.className || '']);
+  else recipients = students.filter(s => pickSel[s._id]);
+
+  const withPhone = recipients.filter(s => s.parentPhone || s.phone);
+  const withoutPhone = recipients.filter(s => !(s.parentPhone || s.phone));
+
+  const teacher = info?.teacherName || 'your teacher';
+  const place = info?.classroomName || 'the coaching center';
+
+  const templates = [
+    `There will be no class tomorrow. We will inform you about the next class soon.`,
+    `Reminder: please ensure timely arrival and bring all required books to the next class.`,
+    `There is an important class scheduled. Kindly make sure your child attends.`,
+  ];
+
+  // Per-recipient message: polite greeting + your text + sign-off.
+  const buildMsg = (s) => {
+    const greet = s?.parentName ? `Dear ${s.parentName}` : 'Dear Parent';
+    const txt = (body || '').trim() || '(your message here)';
+    return `${greet},\n\nThis is ${teacher} from ${place}.\n\n${txt}\n\nWarm regards,\n${teacher}`;
+  };
+
+  return (
+    <Modal onClose={onClose} title="Message Parents on WhatsApp">
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Choose who to inform, type your message, then tap each green button to open WhatsApp with it ready to send.
+      </p>
+
+      <label>Send to</label>
+      <div className="radio-group">
+        <label className="radio-label"><input type="radio" checked={mode === 'all'} onChange={() => setMode('all')} /><span>Everyone</span></label>
+        {batches.length > 0 && <label className="radio-label"><input type="radio" checked={mode === 'batch'} onChange={() => setMode('batch')} /><span>By batch</span></label>}
+        {classes.length > 0 && <label className="radio-label"><input type="radio" checked={mode === 'class'} onChange={() => setMode('class')} /><span>By class</span></label>}
+        <label className="radio-label"><input type="radio" checked={mode === 'pick'} onChange={() => setMode('pick')} /><span>Specific students</span></label>
+      </div>
+
+      {mode === 'batch' && (
+        <div className="chip-group" style={{ marginTop: 8 }}>
+          {batches.map(b => (
+            <button key={b._id} type="button" className={'chip-toggle' + (batchSel[b._id] ? ' on' : '')} onClick={() => toggle(setBatchSel)(b._id)}>{b.name}</button>
+          ))}
+          <button type="button" className={'chip-toggle' + (batchSel[''] ? ' on' : '')} onClick={() => toggle(setBatchSel)('')}>No batch</button>
+        </div>
+      )}
+
+      {mode === 'class' && (
+        <div className="chip-group" style={{ marginTop: 8 }}>
+          {classes.map(c => (
+            <button key={c} type="button" className={'chip-toggle' + (classSel[c] ? ' on' : '')} onClick={() => toggle(setClassSel)(c)}>{c}</button>
+          ))}
+        </div>
+      )}
+
+      {mode === 'pick' && (
+        <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8, marginTop: 8 }}>
+          {students.map(s => (
+            <label key={s._id} className="checkbox-label" style={{ display: 'block', background: 'transparent' }}>
+              <input type="checkbox" checked={!!pickSel[s._id]} onChange={() => toggle(setPickSel)(s._id)} />
+              <span>{s.name} (Roll #{s.rollNumber}){!(s.parentPhone || s.phone) ? ' — no phone' : ''}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <label style={{ marginTop: 12 }}>Your message</label>
+      <textarea value={body} onChange={e => setBody(e.target.value)} rows={4} placeholder="Type the message you want to send to parents…" />
+      <div className="chip-group" style={{ marginTop: 6 }}>
+        {templates.map((t, i) => (
+          <button key={i} type="button" className="chip-toggle" onClick={() => setBody(t)} title="Use this template">{t.slice(0, 28)}…</button>
+        ))}
+      </div>
+
+      <div className="info-card" style={{ marginTop: 12 }}>
+        <strong>{withPhone.length}</strong> recipient{withPhone.length !== 1 ? 's' : ''} ready
+        {withoutPhone.length > 0 && <span className="small muted"> · {withoutPhone.length} skipped (no phone)</span>}
+      </div>
+
+      {withPhone.length > 0 && (
+        <div className="list" style={{ maxHeight: 300, overflowY: 'auto', marginTop: 8 }}>
+          {withPhone.map((s) => (
+            <div key={s._id} className="history-row" style={{ alignItems: 'center' }}>
+              <div>
+                <strong>{s.name}</strong>
+                <p className="small muted" style={{ margin: 0 }}>Roll #{s.rollNumber}{s.parentName ? ` · ${s.parentName}` : ''}</p>
+              </div>
+              <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
+                href={whatsappLink(s.parentPhone || s.phone, buildMsg(s))}>
+                <MessageCircle size={12} /> WhatsApp
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {withoutPhone.length > 0 && (
+        <p className="small muted" style={{ marginTop: 8 }}>
+          No phone number: {withoutPhone.map(s => s.name).join(', ')}. Add a phone in the Students tab to include them.
+        </p>
+      )}
+    </Modal>
+  );
+}
+
 // Student/parent: see their exam list
 function ExamList() {
   const [exams, setExams] = useState([]);
@@ -5152,6 +5384,8 @@ function PaidFeesTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [viewingStudent, setViewingStudent] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [undoing, setUndoing] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -5162,6 +5396,18 @@ function PaidFeesTab() {
   };
 
   useEffect(() => { load(); }, [month]);
+
+  // Roll back a payment marked by mistake.
+  const undoPaid = async (s) => {
+    if (!confirm(`Undo the payment for ${s.name} (${monthLabel(month)})? This moves them back to Pending.`)) return;
+    setUndoing(s._id);
+    try {
+      await api.post('/fees/unmark-paid', { studentId: s._id, month });
+      await load();
+    } catch (e) {
+      alert('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setUndoing(null); }
+  };
 
   if (loading) return <p className="muted">Loading…</p>;
 
@@ -5181,12 +5427,17 @@ function PaidFeesTab() {
       {(!data?.paid?.length) ? (
         <div className="empty"><IndianRupee size={48} color="#999" /><h3>No payments yet</h3><p className="muted">No one has been marked as paid for {month}.</p></div>
       ) : (
+        <>
+        <p className="small muted" style={{ margin: '4px 0 8px' }}>Tap a student for details. Marked someone by mistake? Use <strong>Undo</strong>.</p>
         <div className="pending-fees-list">
-          {data.paid.map(s => (
-            <div key={s._id} className="pending-fee-row" style={{ borderLeft: '4px solid #16a34a', cursor: 'pointer' }} onClick={() => setViewingStudent(s)}>
-              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1 }}>
+          {data.paid.map(s => {
+            const expanded = expandedId === s._id;
+            return (
+            <div key={s._id} className={'pending-fee-row-wrap' + (expanded ? ' expanded' : '')}>
+            <div className="pending-fee-row" style={{ borderLeft: '4px solid #16a34a' }}>
+              <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1, cursor: 'pointer' }} onClick={() => setExpandedId(expanded ? null : s._id)} title="Tap for details">
                 {s.photo ? <img src={s.photo} alt="" className="student-avatar" /> : <div className="student-avatar placeholder"><User size={20} /></div>}
-                <div>
+                <div style={{ flex: 1 }}>
                   <strong>{s.name}</strong>
                   <p className="small muted" style={{ margin: '2px 0 0' }}>
                     Roll #{s.rollNumber} · {formatRupee(s.paidAmount || s.monthlyFee || 0)}
@@ -5194,11 +5445,40 @@ function PaidFeesTab() {
                     {s.note && <span> · "{s.note}"</span>}
                   </p>
                 </div>
+                <ChevronDown size={16} className={'expand-chevron' + (expanded ? ' open' : '')} />
               </div>
-              <span className="badge green"><CheckCircle size={12} /> Paid</span>
+              <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                <span className="badge green"><CheckCircle size={12} /> Paid</span>
+                <button className="btn btn-outline btn-mini" onClick={() => undoPaid(s)} disabled={undoing === s._id} title="Roll back this payment">
+                  <RotateCcw size={12} /> {undoing === s._id ? '…' : 'Undo'}
+                </button>
+              </div>
             </div>
-          ))}
+            {expanded && (
+              <div className="fee-expand">
+                <dl className="info-dl">
+                  {s.className && <><dt>Class</dt><dd>{s.className}</dd></>}
+                  <dt>Amount paid</dt><dd>{formatRupee(s.paidAmount || s.monthlyFee || 0)}</dd>
+                  <dt>Month</dt><dd>{monthLabel(month)}</dd>
+                  {s.paidOn && <><dt>Paid on</dt><dd>{new Date(s.paidOn).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</dd></>}
+                  {s.note && <><dt>Note</dt><dd>"{s.note}"</dd></>}
+                  {s.parentPhone && <><dt>Parent phone</dt><dd>{s.parentPhone}</dd></>}
+                </dl>
+                <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-outline btn-mini" onClick={() => setViewingStudent(s)}>
+                    <Eye size={12} /> Full profile
+                  </button>
+                  <button className="btn btn-outline btn-mini" onClick={() => undoPaid(s)} disabled={undoing === s._id}>
+                    <RotateCcw size={12} /> Undo payment
+                  </button>
+                </div>
+              </div>
+            )}
+            </div>
+            );
+          })}
         </div>
+        </>
       )}
       {viewingStudent && (
         <StudentDetailModal student={viewingStudent} info={{}} onClose={() => setViewingStudent(null)} onEdit={() => setViewingStudent(null)} />
