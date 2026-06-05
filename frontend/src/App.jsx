@@ -62,7 +62,7 @@ const isOffDayToday = (announcements, batchId) => {
   const today = todayISO();
   return announcements.find(a =>
     a.type === 'off-day' && a.dates && a.dates.includes(today) &&
-    (!a.batchId || !batchId || a.batchId === batchId || a.batchId === '')
+    (!a.batchId || !batchId || String(a.batchId) === String(batchId) || a.batchId === '')
   );
 };
 
@@ -971,6 +971,7 @@ function TodayTab({ info, announcements }) {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [batchFilter, setBatchFilter] = useState('');
   const [classFilter, setClassFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'present' | 'absent' | 'unmarked'
   const [studentMode, setStudentMode] = useState(false);
   const [studentModeDone, setStudentModeDone] = useState(null);
   const [date, setDate] = useState(todayISO());        // which day we're viewing/editing
@@ -1121,8 +1122,9 @@ function TodayTab({ info, announcements }) {
 
   const allClasses = [...new Set(students.map(s => s.className).filter(Boolean))].sort();
   const q = search.trim().toLowerCase();
+  // Use String() on both sides so ObjectId vs string never silently fails to match.
   const visible = [...students]
-    .filter(s => (!batchFilter || s.batchId === batchFilter) && (!classFilter || s.className === classFilter))
+    .filter(s => (!batchFilter || String(s.batchId) === String(batchFilter)) && (!classFilter || s.className === classFilter))
     .filter(s => !q || s.name.toLowerCase().includes(q) || String(s.rollNumber || '').toLowerCase().includes(q))
     .sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
   const birthdayStudents = visible.filter(s => isBirthdayToday(s.birthday));
@@ -1145,6 +1147,18 @@ function TodayTab({ info, announcements }) {
   const visibleAtt = todayAtt.filter(a => visible.some(s => String(s._id) === String(a.studentId)));
   const presentCount = visibleAtt.filter(a => a.status === 'present').length;
   const absentCount = visibleAtt.filter(a => a.status === 'absent').length;
+  const unmarkedCount = visible.length - visibleAtt.length;
+
+  // Status-card filter: tapping a stat card narrows the list below it to that group.
+  // Stat counts always reflect the batch/class/search scope (not the status filter).
+  const displayed = visible.filter(s => {
+    if (statusFilter === 'all') return true;
+    const att = todayAtt.find(a => String(a.studentId) === String(s._id));
+    if (statusFilter === 'present') return att?.status === 'present';
+    if (statusFilter === 'absent')  return att?.status === 'absent';
+    if (statusFilter === 'unmarked') return !att;
+    return true;
+  });
 
   return (
     <div>
@@ -1202,11 +1216,49 @@ function TodayTab({ info, announcements }) {
 
       <div className="stat-row">
         <div className="stat"><strong>{today}</strong></div>
-        <div className="stat green"><CheckCircle size={20} /> {presentCount} Present</div>
-        <div className="stat red"><XCircle size={20} /> {absentCount} Absent</div>
-        <div className="stat muted"><Info size={20} /> {visible.length - visibleAtt.length} Not marked</div>
-        <div className="stat blue"><Users size={20} /> {visible.length} Total</div>
+        <button
+          type="button"
+          className={'stat stat-clickable green' + (statusFilter === 'present' ? ' active' : '')}
+          onClick={() => setStatusFilter(statusFilter === 'present' ? 'all' : 'present')}
+          title="Tap to see only present students"
+        >
+          <CheckCircle size={20} /> {presentCount} Present
+        </button>
+        <button
+          type="button"
+          className={'stat stat-clickable red' + (statusFilter === 'absent' ? ' active' : '')}
+          onClick={() => setStatusFilter(statusFilter === 'absent' ? 'all' : 'absent')}
+          title="Tap to see only absent students"
+        >
+          <XCircle size={20} /> {absentCount} Absent
+        </button>
+        <button
+          type="button"
+          className={'stat stat-clickable muted' + (statusFilter === 'unmarked' ? ' active' : '')}
+          onClick={() => setStatusFilter(statusFilter === 'unmarked' ? 'all' : 'unmarked')}
+          title="Tap to see only unmarked students"
+        >
+          <Info size={20} /> {unmarkedCount} Not marked
+        </button>
+        <button
+          type="button"
+          className={'stat stat-clickable blue' + (statusFilter === 'all' ? ' active' : '')}
+          onClick={() => setStatusFilter('all')}
+          title="Show everyone"
+        >
+          <Users size={20} /> {visible.length} Total
+        </button>
       </div>
+      {statusFilter !== 'all' && (
+        <div className="filter-chip-row">
+          <span className="filter-chip-label">
+            Showing only <strong>{statusFilter === 'unmarked' ? 'not marked' : statusFilter}</strong> students ({displayed.length})
+          </span>
+          <button className="btn-link small" onClick={() => setStatusFilter('all')}>
+            <X size={12} /> Show all
+          </button>
+        </div>
+      )}
 
       {selDow === 0 && (
         <div className="off-day-banner" style={{ background: '#fef3c7', borderLeft: '4px solid #d97706', padding: '10px 14px', borderRadius: 8, margin: '12px 0' }}>
@@ -1252,7 +1304,17 @@ function TodayTab({ info, announcements }) {
       </div>
 
       <div className="list">
-        {visible.map(s => {
+        {displayed.length === 0 && statusFilter !== 'all' && (
+          <div className="empty" style={{ padding: '24px 12px' }}>
+            <Info size={32} color="#999" />
+            <p className="muted small">
+              No {statusFilter === 'unmarked' ? 'not-marked' : statusFilter} students in the current view.
+              <br />
+              <button className="btn-link small" onClick={() => setStatusFilter('all')}>Show everyone</button>
+            </p>
+          </div>
+        )}
+        {displayed.map(s => {
           const att = getAtt(s._id);
           const batch = findBatch(info, s.batchId);
           const expanded = expandedId === s._id;
@@ -1417,7 +1479,7 @@ function StudentsTab({ info, refreshInfo }) {
     (s.rollNumber || '').includes(search) ||
     (s.phone || '').includes(search)
   );
-  if (batchFilter) filtered = filtered.filter(s => s.batchId === batchFilter);
+  if (batchFilter) filtered = filtered.filter(s => String(s.batchId) === String(batchFilter));
   if (classFilter) filtered = filtered.filter(s => s.className === classFilter);
   filtered = [...filtered].sort((a, b) => {
     if (sortBy === 'name') return a.name.localeCompare(b.name);
@@ -2153,6 +2215,7 @@ function FeesTab({ info }) {
   const [loading, setLoading] = useState(true);
   const [batchFilter, setBatchFilter] = useState('');
   const [classFilter, setClassFilter] = useState('');
+  const [openFor, setOpenFor] = useState(null); // student row clicked → opens detail modal
 
   const load = async () => {
     setLoading(true);
@@ -2169,7 +2232,7 @@ function FeesTab({ info }) {
   if (!data) return <p className="muted">No data.</p>;
 
   let rows = [...(data.students || [])];
-  if (batchFilter) rows = rows.filter(s => s.batchId === batchFilter);
+  if (batchFilter) rows = rows.filter(s => String(s.batchId) === String(batchFilter));
   if (classFilter) rows = rows.filter(s => s.className === classFilter);
   rows = rows.sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
 
@@ -2220,13 +2283,20 @@ function FeesTab({ info }) {
       )}
 
       <h3 style={{ marginTop: 16 }}>Per-student breakdown</h3>
+      <p className="small muted" style={{ margin: '0 0 8px' }}>Tap a student for full details — days attended, per-day cost, pending dues, and a WhatsApp reminder.</p>
       <div className="list">
         {rows.length === 0 && <p className="muted">No students for this filter.</p>}
         {rows.map(r => {
           const batch = findBatch(info, r.batchId);
           const f = r.fees || {};
           return (
-            <div key={r._id} className="fee-row">
+            <button
+              key={r._id}
+              type="button"
+              className="fee-row fee-row-clickable"
+              onClick={() => setOpenFor({ ...r, _month: month })}
+              title="Tap for full payment details"
+            >
               <div className="fee-row-left">
                 <div className="fee-row-name">{r.name}</div>
                 <div className="fee-row-meta">
@@ -2240,7 +2310,8 @@ function FeesTab({ info }) {
                 <div className="fee-row-month">{formatRupee(f.monthlyFee || 0)}</div>
                 <div className="fee-row-day">{formatRupee(Math.round(f.perDay || 0))}/day</div>
               </div>
-            </div>
+              <ChevronRight size={16} className="fee-row-chevron" />
+            </button>
           );
         })}
       </div>
@@ -2248,7 +2319,217 @@ function FeesTab({ info }) {
       <p className="small muted" style={{ marginTop: 12 }}>
         <Info size={12} /> Per-day = monthly fee ÷ working days. Working days = total days minus weekly off (Sunday by default). Announced holidays do <strong>not</strong> reduce the working-day count.
       </p>
+      {openFor && (
+        <StudentFeeDetailModal
+          student={openFor}
+          month={openFor._month}
+          info={info}
+          onClose={() => setOpenFor(null)}
+          onChanged={load}
+        />
+      )}
     </div>
+  );
+}
+
+// ============================
+// STUDENT FEE DETAIL MODAL (opens from FeesTab Overview)
+// Shows: basic info, attendance summary (present / absent / %), per-day cost,
+// this month's working days, and ALL pending months with a combined dues total
+// + WhatsApp reminder. Designed to give the teacher a one-glance picture of
+// "how much has this student attended and how much does he owe me".
+// ============================
+function StudentFeeDetailModal({ student, month, info, onClose, onChanged }) {
+  const [summary, setSummary] = useState(null);     // {present, absent, total, percentage}
+  const [dues, setDues] = useState(null);           // {pending:[], total, paidMonths:[]}
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setErr('');
+    try {
+      const [s, d] = await Promise.all([
+        api.get('/attendance/summary/' + student._id).catch(() => ({ data: null })),
+        api.get('/fees/dues/' + student._id).catch(() => ({ data: null })),
+      ]);
+      setSummary(s.data);
+      setDues(d.data);
+    } catch (e) {
+      setErr(e.response?.data?.error || 'Could not load details');
+    }
+  };
+  useEffect(() => { load(); }, [student._id]);
+
+  const markThisMonthPaid = async () => {
+    if (!confirm(`Mark ${monthLabel(month)} as paid for ${student.name}?`)) return;
+    setBusy(true);
+    try {
+      await api.post('/fees/mark-paid', {
+        studentId: student._id,
+        month,
+        amount: student.fees?.monthlyFee || student.monthlyFee || 0,
+      });
+      await load();
+      if (onChanged) onChanged();
+    } catch (e) {
+      alert('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setBusy(false); }
+  };
+
+  const markMonthPaid = async (m) => {
+    setBusy(true);
+    try {
+      await api.post('/fees/mark-paid', { studentId: student._id, month: m.month, amount: m.amount });
+      await load();
+      if (onChanged) onChanged();
+    } catch (e) {
+      alert('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setBusy(false); }
+  };
+
+  const fees = student.fees || {};
+  const monthlyFee = dues?.monthlyFee ?? (student.monthlyFee || fees.monthlyFee || 0);
+  const totalDue = dues?.total || 0;
+  const phone = student.parentPhone || dues?.student?.parentPhone;
+  const isPaidThisMonth = dues?.paidMonths?.includes(month);
+  const batch = findBatch(info, student.batchId);
+
+  return (
+    <Modal onClose={onClose} title={`${student.name} — Fees & Attendance`}>
+      {err && <div className="error-box">{err}</div>}
+
+      {/* Quick identity row */}
+      <div className="fee-detail-header">
+        <div className="row" style={{ gap: 12, alignItems: 'center', flex: 1 }}>
+          {student.photo ? (
+            <img src={student.photo} alt="" className="detail-avatar" />
+          ) : (
+            <div className="detail-avatar placeholder"><User size={22} /></div>
+          )}
+          <div>
+            <h3 style={{ margin: 0 }}>{student.name}</h3>
+            <p className="small muted" style={{ margin: '2px 0 0' }}>
+              Roll #{student.rollNumber}
+              {student.className ? ` · ${student.className}` : ''}
+              {batch ? ` · ${batch.name}` : ''}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Attendance summary */}
+      <h4 style={{ marginTop: 14, marginBottom: 6 }}><BarChart3 size={14} /> Attendance (all-time)</h4>
+      {!summary ? (
+        <p className="muted small">Loading attendance…</p>
+      ) : (
+        <div className="fee-detail-grid">
+          <div className="fee-detail-card green">
+            <strong>{summary.present}</strong>
+            <span>Present</span>
+          </div>
+          <div className="fee-detail-card red">
+            <strong>{summary.absent}</strong>
+            <span>Absent</span>
+          </div>
+          <div className="fee-detail-card blue">
+            <strong>{summary.percentage}%</strong>
+            <span>Attendance</span>
+          </div>
+        </div>
+      )}
+
+      {/* This month's fee math */}
+      <h4 style={{ marginTop: 14, marginBottom: 6 }}><Wallet size={14} /> {monthLabel(month)}</h4>
+      <div className="fee-detail-grid">
+        <div className="fee-detail-card">
+          <strong>{formatRupee(monthlyFee)}</strong>
+          <span>Monthly fee</span>
+        </div>
+        <div className="fee-detail-card">
+          <strong>{formatRupee(Math.round(fees.perDay || 0))}</strong>
+          <span>Per working day</span>
+        </div>
+        <div className="fee-detail-card">
+          <strong>{fees.workingDays || 0}/{fees.totalDays || 0}</strong>
+          <span>Working days</span>
+        </div>
+      </div>
+
+      <div className="info-card" style={{ marginTop: 12 }}>
+        <div className="row" style={{ justifyContent: 'space-between', margin: 0 }}>
+          <div>
+            <strong>Status for {monthLabel(month)}</strong>
+            <p className="small muted" style={{ margin: '2px 0 0' }}>
+              {isPaidThisMonth ? 'Paid ✓' : (monthlyFee > 0 ? `${formatRupee(monthlyFee)} pending` : 'No fee set for this student')}
+            </p>
+          </div>
+          {!isPaidThisMonth && monthlyFee > 0 && (
+            <button className="btn btn-green btn-mini" onClick={markThisMonthPaid} disabled={busy}>
+              <Check size={12} /> {busy ? '…' : 'Mark Paid'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Carry-over pending months */}
+      {dues && dues.pending && dues.pending.length > 0 && (
+        <>
+          <h4 style={{ marginTop: 14, marginBottom: 6 }}><AlertCircle size={14} /> Pending months ({dues.pendingCount})</h4>
+          <div className="list" style={{ marginBottom: 10 }}>
+            {dues.pending.map(m => (
+              <div key={m.month} className="history-row" style={{ alignItems: 'center' }}>
+                <div>
+                  <strong>{monthLabel(m.month)}</strong>
+                  <p className="small muted" style={{ margin: 0 }}>{formatRupee(m.amount)}</p>
+                </div>
+                <button className="btn btn-green btn-mini" disabled={busy} onClick={() => markMonthPaid(m)}>
+                  <Check size={12} /> Mark paid
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="info-card" style={{ background: '#fff7ed', borderColor: '#fed7aa' }}>
+            <div className="row" style={{ justifyContent: 'space-between', margin: 0 }}>
+              <strong>Total pending</strong>
+              <strong style={{ fontSize: 20, color: '#c2410c' }}>{formatRupee(totalDue)}</strong>
+            </div>
+          </div>
+        </>
+      )}
+
+      {dues && dues.pending && dues.pending.length === 0 && (
+        <div className="empty" style={{ padding: '16px 8px' }}>
+          <CheckCircle size={32} color="#16a34a" />
+          <p className="muted small" style={{ margin: '6px 0 0' }}>All fees paid up to date. Nothing pending.</p>
+        </div>
+      )}
+
+      {/* Parent contact + WhatsApp reminder */}
+      {(student.parentName || phone) && (
+        <>
+          <h4 style={{ marginTop: 14, marginBottom: 6 }}><Phone size={14} /> Parent</h4>
+          <dl className="info-dl">
+            {student.parentName && <><dt>Name</dt><dd>{student.parentName}</dd></>}
+            {phone && <><dt>Phone</dt><dd>{phone}</dd></>}
+          </dl>
+        </>
+      )}
+
+      <div className="modal-buttons" style={{ marginTop: 14 }}>
+        {phone && dues && dues.pending && dues.pending.length > 0 ? (
+          <a
+            className="btn btn-whatsapp"
+            target="_blank" rel="noreferrer"
+            href={whatsappLink(phone, feeReminderMsg(dues.student || student, dues.pending, dues.total, info))}
+          >
+            <MessageCircle size={14} /> Send WhatsApp Reminder
+          </a>
+        ) : !phone ? (
+          <span className="badge red small">⚠ No parent phone on file</span>
+        ) : null}
+        <button className="btn btn-outline" onClick={onClose}>Close</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -4872,11 +5153,14 @@ function ExamsTab({ info }) {
   const [exams, setExams] = useState([]);
   const [students, setStudents] = useState([]);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ title: '', description: '', examDate: '', studentIds: [] });
+  // form holds either a new exam (no _id) or an edit (with _id).
+  const [form, setForm] = useState({ _id: null, title: '', description: '', examDate: '', studentIds: [] });
   const [allSelected, setAllSelected] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-  const [sendExam, setSendExam] = useState(null); // exam being sent via WhatsApp
+  const [sendExam, setSendExam] = useState(null);   // exam being sent via WhatsApp
+  const [expandedId, setExpandedId] = useState(null);
+  const [statusFor, setStatusFor] = useState(null); // exam whose detailed delivery list is open
 
   const load = async () => {
     const [e, s] = await Promise.all([api.get('/exams'), api.get('/students')]);
@@ -4885,23 +5169,58 @@ function ExamsTab({ info }) {
   };
   useEffect(() => { load(); }, []);
 
+  // Resolve which students an exam targets (empty studentIds = all students).
+  const targetsOf = (exam) => {
+    const ids = exam.studentIds || [];
+    if (ids.length === 0) return students;
+    const set = new Set(ids.map(String));
+    return students.filter(s => set.has(String(s._id)));
+  };
+
   const save = async () => {
     setErr(''); setSaving(true);
     try {
-      await api.post('/exams', {
-        ...form,
+      const payload = {
+        title: form.title,
+        description: form.description,
+        examDate: form.examDate,
         studentIds: allSelected ? [] : form.studentIds, // empty = all
-      });
+      };
+      if (form._id) {
+        await api.put('/exams/' + form._id, payload);
+      } else {
+        await api.post('/exams', payload);
+      }
       setShowForm(false);
-      setForm({ title: '', description: '', examDate: '', studentIds: [] });
+      setForm({ _id: null, title: '', description: '', examDate: '', studentIds: [] });
       setAllSelected(true);
       load();
     } catch (e) { setErr(e.response?.data?.error || 'Failed'); }
     finally { setSaving(false); }
   };
 
+  const openNew = () => {
+    setForm({ _id: null, title: '', description: '', examDate: '', studentIds: [] });
+    setAllSelected(true);
+    setErr('');
+    setShowForm(true);
+  };
+
+  const openEdit = (exam) => {
+    setForm({
+      _id: exam._id,
+      title: exam.title || '',
+      description: exam.description || '',
+      examDate: exam.examDate || '',
+      studentIds: (exam.studentIds || []).map(String),
+    });
+    setAllSelected(!(exam.studentIds && exam.studentIds.length));
+    setErr('');
+    setShowForm(true);
+  };
+
   const del = async (id) => {
-    if (!confirm('Delete this exam?')) return;
+    if (!confirm('Delete this exam? This cannot be undone.')) return;
     await api.delete('/exams/' + id);
     load();
   };
@@ -4917,37 +5236,116 @@ function ExamsTab({ info }) {
     <div>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3><BookOpen size={16} /> Exams & Tests</h3>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Exam</button>
+        <button className="btn btn-primary" onClick={openNew}><Plus size={14} /> New Exam</button>
       </div>
 
       {exams.length === 0 ? (
         <p className="muted small">No exams yet. Create one to notify students.</p>
       ) : (
+        <p className="small muted" style={{ margin: '4px 0 8px' }}>
+          Tap an exam to expand. Use <strong>Edit</strong> to change details, <strong>Send</strong> to notify on WhatsApp,
+          and <strong>Delivery</strong> to see who got the message and who didn't.
+        </p>
+      )}
+
+      {exams.length > 0 && (
         <div className="list">
-          {exams.map(e => (
-            <div key={e._id} className="student-card">
-              <div style={{ flex: 1 }}>
-                <strong>{e.title}</strong>
-                {e.examDate && <span className="badge small" style={{ marginLeft: 8 }}>{e.examDate}</span>}
-                {e.description && <p className="small" style={{ marginTop: 4 }}>{e.description}</p>}
-                <p className="small muted">
-                  Sent to {e.studentIds?.length ? `${e.studentIds.length} selected student(s)` : 'all students'} ·{' '}
-                  {new Date(e.createdAt).toLocaleString()}
-                </p>
+          {exams.map(e => {
+            const expanded = expandedId === e._id;
+            const targets = targetsOf(e);
+            const sentSet = new Set((e.sentVia || []).map(x => String(x.studentId)));
+            const readSet = new Set((e.readBy || []).map(x => String(x.studentId)));
+            const sentCount = targets.filter(s => sentSet.has(String(s._id))).length;
+            const readCount = targets.filter(s => readSet.has(String(s._id))).length;
+            const targetLabel = e.studentIds?.length
+              ? `${targets.length} selected student${targets.length !== 1 ? 's' : ''}`
+              : 'all students';
+            return (
+              <div key={e._id} className={'exam-card-wrap' + (expanded ? ' expanded' : '')}>
+                <div className="student-card">
+                  <div
+                    style={{ flex: 1, cursor: 'pointer' }}
+                    onClick={() => setExpandedId(expanded ? null : e._id)}
+                    title="Tap to expand"
+                  >
+                    <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                      <strong>{e.title}</strong>
+                      {e.examDate && <span className="badge small">{e.examDate}</span>}
+                      <ChevronDown size={14} className={'expand-chevron' + (expanded ? ' open' : '')} />
+                    </div>
+                    {e.description && !expanded && (
+                      <p className="small" style={{ marginTop: 4, color: '#475569',
+                        display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.description}</p>
+                    )}
+                    <p className="small muted" style={{ marginTop: 4 }}>
+                      Targeted to {targetLabel} ·{' '}
+                      <span style={{ color: sentCount > 0 ? '#16a34a' : '#94a3b8' }}>
+                        📤 Sent {sentCount}/{targets.length}
+                      </span>
+                      {readSet.size > 0 && (
+                        <> · <span style={{ color: '#1e40af' }}>👁 Seen {readCount}/{targets.length}</span></>
+                      )}
+                      {' · '}{new Date(e.createdAt).toLocaleDateString()}
+                      {e.updatedAt && new Date(e.updatedAt).getTime() - new Date(e.createdAt).getTime() > 1000 && (
+                        <span className="badge gray small" style={{ marginLeft: 6 }}>edited</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="row-buttons">
+                    <button className="btn btn-outline btn-mini" onClick={() => openEdit(e)} title="Edit this exam">
+                      <Edit2 size={12} /> Edit
+                    </button>
+                    <button className="btn btn-whatsapp btn-mini" onClick={() => setSendExam(e)} title="Send details on WhatsApp">
+                      <MessageCircle size={12} /> Send
+                    </button>
+                    <button className="icon-btn icon-btn-danger" onClick={() => del(e._id)}><Trash2 size={14} /></button>
+                  </div>
+                </div>
+                {expanded && (
+                  <div className="att-expand">
+                    {e.description && (
+                      <>
+                        <dt>Description</dt>
+                        <dd style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{e.description}</dd>
+                      </>
+                    )}
+                    <dl className="info-dl">
+                      {e.examDate && <><dt>Date</dt><dd>{e.examDate}</dd></>}
+                      <dt>Recipients</dt>
+                      <dd>{targetLabel}</dd>
+                      <dt>Delivery</dt>
+                      <dd>
+                        📤 {sentCount} of {targets.length} marked sent
+                        {readSet.size > 0 && <> · 👁 {readCount} have opened it</>}
+                      </dd>
+                      <dt>Created</dt>
+                      <dd>{new Date(e.createdAt).toLocaleString()}</dd>
+                      {e.updatedAt && new Date(e.updatedAt).getTime() - new Date(e.createdAt).getTime() > 1000 && (
+                        <><dt>Last edited</dt><dd>{new Date(e.updatedAt).toLocaleString()}</dd></>
+                      )}
+                    </dl>
+                    <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                      <button className="btn btn-outline btn-mini" onClick={() => setStatusFor(e)}>
+                        <Eye size={12} /> See who got it / who didn't
+                      </button>
+                      <button className="btn btn-outline btn-mini" onClick={() => openEdit(e)}>
+                        <Edit2 size={12} /> Edit
+                      </button>
+                      <button className="btn btn-whatsapp btn-mini" onClick={() => setSendExam(e)}>
+                        <MessageCircle size={12} /> Send / Resend on WhatsApp
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="row-buttons">
-                <button className="btn btn-whatsapp btn-mini" onClick={() => setSendExam(e)} title="Send details on WhatsApp">
-                  <MessageCircle size={12} /> Send
-                </button>
-                <button className="icon-btn icon-btn-danger" onClick={() => del(e._id)}><Trash2 size={14} /></button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {showForm && (
-        <Modal onClose={() => setShowForm(false)} title="New Exam / Test">
+        <Modal onClose={() => setShowForm(false)} title={form._id ? `Edit "${form.title || 'Exam'}"` : 'New Exam / Test'}>
           <label>Title *</label>
           <input value={form.title} onChange={ev => setForm({ ...form, title: ev.target.value })} placeholder="e.g. Math Class Test" />
           <label>Date</label>
@@ -4966,7 +5364,7 @@ function ExamsTab({ info }) {
             <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8 }}>
               {students.map(s => (
                 <label key={s._id} className="checkbox-label" style={{ display: 'block' }}>
-                  <input type="checkbox" checked={form.studentIds.includes(s._id)} onChange={() => toggleStudent(s._id)} />
+                  <input type="checkbox" checked={form.studentIds.includes(String(s._id))} onChange={() => toggleStudent(String(s._id))} />
                   <span>{s.name} (Roll #{s.rollNumber})</span>
                 </label>
               ))}
@@ -4975,24 +5373,140 @@ function ExamsTab({ info }) {
 
           {err && <div className="error-box">{err}</div>}
           <button className="btn btn-primary btn-block" onClick={save} disabled={saving || !form.title}>
-            <Send size={14} /> {saving ? 'Sending…' : 'Send to Students'}
+            <Send size={14} /> {saving ? 'Saving…' : (form._id ? 'Save Changes' : 'Create Exam')}
           </button>
         </Modal>
       )}
 
       {sendExam && (
-        <ExamWhatsAppModal exam={sendExam} students={students} info={info || {}} onClose={() => setSendExam(null)} />
+        <ExamWhatsAppModal
+          exam={sendExam}
+          students={students}
+          info={info || {}}
+          onClose={() => { setSendExam(null); load(); }}
+          onSent={load}
+        />
+      )}
+
+      {statusFor && (
+        <ExamDeliveryModal
+          exam={statusFor}
+          students={students}
+          onClose={() => { setStatusFor(null); load(); }}
+          onChanged={load}
+        />
       )}
     </div>
   );
 }
 
+// Read-only view of which students got the exam message and which still haven't.
+// Lets the teacher manually toggle "marked sent" status, useful when a WhatsApp
+// message was sent outside the app or sent and the entry needs to be undone.
+function ExamDeliveryModal({ exam, students, onClose, onChanged }) {
+  const [busyId, setBusyId] = useState(null);
+  const [sentVia, setSentVia] = useState(exam.sentVia || []);
+  const [readBy, setReadBy] = useState(exam.readBy || []);
+  const sentSet = new Set(sentVia.map(x => String(x.studentId)));
+  const readSet = new Set(readBy.map(x => String(x.studentId)));
+
+  const targets = (exam.studentIds && exam.studentIds.length)
+    ? students.filter(s => exam.studentIds.map(String).includes(String(s._id)))
+    : students;
+
+  const got = targets.filter(s => sentSet.has(String(s._id)));
+  const notGot = targets.filter(s => !sentSet.has(String(s._id)));
+
+  const toggle = async (s) => {
+    setBusyId(String(s._id));
+    try {
+      if (sentSet.has(String(s._id))) {
+        const r = await api.post('/exams/' + exam._id + '/unmark-sent', { studentId: s._id });
+        setSentVia(r.data.exam?.sentVia || []);
+      } else {
+        const r = await api.post('/exams/' + exam._id + '/mark-sent', { studentId: s._id, channel: 'manual' });
+        setSentVia(r.data.exam?.sentVia || []);
+      }
+      if (onChanged) onChanged();
+    } catch (e) {
+      alert('Failed: ' + (e.response?.data?.error || e.message));
+    } finally { setBusyId(null); }
+  };
+
+  return (
+    <Modal onClose={onClose} title={`Delivery — ${exam.title}`}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        These counts come from your in-app sends. If you sent a message outside the app
+        you can toggle a student between Sent / Not sent below.
+      </p>
+
+      <div className="summary-stats" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <div className="stat-big green"><strong>{got.length}</strong><span>Sent</span></div>
+        <div className="stat-big red"><strong>{notGot.length}</strong><span>Not sent</span></div>
+        <div className="stat-big blue"><strong>{targets.filter(s => readSet.has(String(s._id))).length}</strong><span>Seen</span></div>
+      </div>
+
+      <h4 style={{ marginTop: 14, marginBottom: 6 }}>✅ Got the message ({got.length})</h4>
+      {got.length === 0 ? (
+        <p className="muted small">No one has been marked as sent yet.</p>
+      ) : (
+        <div className="list">
+          {got.map(s => (
+            <div key={s._id} className="history-row" style={{ alignItems: 'center' }}>
+              <div>
+                <strong>{s.name}</strong>
+                <p className="small muted" style={{ margin: 0 }}>
+                  Roll #{s.rollNumber}
+                  {readSet.has(String(s._id)) && <span className="badge blue small" style={{ marginLeft: 6 }}>👁 seen</span>}
+                </p>
+              </div>
+              <button className="btn btn-outline btn-mini" disabled={busyId === String(s._id)} onClick={() => toggle(s)}>
+                <RotateCcw size={12} /> Undo
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h4 style={{ marginTop: 14, marginBottom: 6 }}>❌ Haven't got it ({notGot.length})</h4>
+      {notGot.length === 0 ? (
+        <p className="muted small">Everyone targeted has been marked as sent. ✓</p>
+      ) : (
+        <div className="list">
+          {notGot.map(s => (
+            <div key={s._id} className="history-row" style={{ alignItems: 'center' }}>
+              <div>
+                <strong>{s.name}</strong>
+                <p className="small muted" style={{ margin: 0 }}>
+                  Roll #{s.rollNumber}
+                  {!(s.parentPhone || s.phone) && <span className="badge red small" style={{ marginLeft: 6 }}>no phone</span>}
+                </p>
+              </div>
+              <button className="btn btn-outline btn-mini" disabled={busyId === String(s._id)} onClick={() => toggle(s)}>
+                <Check size={12} /> Mark sent
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="modal-buttons" style={{ marginTop: 12 }}>
+        <button className="btn btn-primary" onClick={onClose}>Done</button>
+      </div>
+    </Modal>
+  );
+}
+
 // Pick recipients (all / by batch / specific students) and send each a polished
 // WhatsApp message with the full exam details + a motivational quote.
-function ExamWhatsAppModal({ exam, students, info, onClose }) {
+// When the teacher taps a green WhatsApp button, we also record that student
+// as "sent" so the delivery report on the exam card reflects reality.
+function ExamWhatsAppModal({ exam, students, info, onClose, onSent }) {
   const [mode, setMode] = useState('all');            // 'all' | 'batch' | 'pick'
   const [batchSel, setBatchSel] = useState({});       // { batchId: true }  ('' = no batch)
   const [pickSel, setPickSel] = useState({});         // { studentId: true }
+  // Local copy of who is marked sent so the UI updates instantly.
+  const [sentSet, setSentSet] = useState(() => new Set((exam.sentVia || []).map(x => String(x.studentId))));
   const batches = info?.batches || [];
 
   const toggleBatch = (id) => setBatchSel(s => ({ ...s, [id]: !s[id] }));
@@ -5006,11 +5520,25 @@ function ExamWhatsAppModal({ exam, students, info, onClose }) {
   const withPhone = recipients.filter(s => s.parentPhone || s.phone);
   const withoutPhone = recipients.filter(s => !(s.parentPhone || s.phone));
 
+  // Fire-and-forget: don't block the WhatsApp link from opening.
+  const recordSend = (studentId) => {
+    api.post('/exams/' + exam._id + '/mark-sent', { studentId, channel: 'whatsapp' })
+      .then(() => {
+        setSentSet(prev => {
+          const next = new Set(prev);
+          next.add(String(studentId));
+          return next;
+        });
+        if (onSent) onSent();
+      })
+      .catch(() => { /* best-effort; the link still opens */ });
+  };
+
   return (
     <Modal onClose={onClose} title={`Send "${exam.title}" on WhatsApp`}>
       <p className="small muted" style={{ marginTop: 0 }}>
         Choose who to notify, then tap each green button to open WhatsApp with the message ready to send.
-        Each message includes the exam details and a motivational note.
+        Each tap is automatically recorded so you can see who's been notified and who hasn't.
       </p>
 
       <label>Send to</label>
@@ -5043,22 +5571,33 @@ function ExamWhatsAppModal({ exam, students, info, onClose }) {
       <div className="info-card" style={{ marginTop: 12 }}>
         <strong>{withPhone.length}</strong> recipient{withPhone.length !== 1 ? 's' : ''} ready
         {withoutPhone.length > 0 && <span className="small muted"> · {withoutPhone.length} skipped (no phone)</span>}
+        <span className="small muted" style={{ marginLeft: 8 }}>
+          · {[...sentSet].length} already marked sent
+        </span>
       </div>
 
       {withPhone.length > 0 && (
         <div className="list" style={{ maxHeight: 320, overflowY: 'auto', marginTop: 8 }}>
-          {withPhone.map((s, i) => (
-            <div key={s._id} className="history-row" style={{ alignItems: 'center' }}>
-              <div>
-                <strong>{s.name}</strong>
-                <p className="small muted" style={{ margin: 0 }}>Roll #{s.rollNumber}</p>
+          {withPhone.map((s, i) => {
+            const isSent = sentSet.has(String(s._id));
+            return (
+              <div key={s._id} className="history-row" style={{ alignItems: 'center' }}>
+                <div>
+                  <strong>{s.name}</strong>
+                  <p className="small muted" style={{ margin: 0 }}>
+                    Roll #{s.rollNumber}
+                    {isSent && <span className="badge green small" style={{ marginLeft: 6 }}>✓ sent</span>}
+                  </p>
+                </div>
+                <a className={'btn btn-mini ' + (isSent ? 'btn-outline' : 'btn-whatsapp')}
+                  target="_blank" rel="noreferrer"
+                  onClick={() => recordSend(s._id)}
+                  href={whatsappLink(s.parentPhone || s.phone, examReminderMsg(s, exam, info, EXAM_QUOTES[i % EXAM_QUOTES.length]))}>
+                  <MessageCircle size={12} /> {isSent ? 'Resend' : 'WhatsApp'}
+                </a>
               </div>
-              <a className="btn btn-whatsapp btn-mini" target="_blank" rel="noreferrer"
-                href={whatsappLink(s.parentPhone || s.phone, examReminderMsg(s, exam, info, EXAM_QUOTES[i % EXAM_QUOTES.length]))}>
-                <MessageCircle size={12} /> WhatsApp
-              </a>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -5194,7 +5733,17 @@ function BatchNotifyModal({ students, info, onClose }) {
 // Student/parent: see their exam list
 function ExamList() {
   const [exams, setExams] = useState([]);
-  useEffect(() => { api.get('/exams').then(r => setExams(r.data.exams || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get('/exams').then(r => {
+      const list = r.data.exams || [];
+      setExams(list);
+      // Fire-and-forget read receipts so the teacher can see who's seen the exam.
+      // Failures are silently ignored — this is a "nice to have" signal, not core.
+      list.forEach(e => {
+        api.post('/exams/' + e._id + '/mark-read', {}).catch(() => {});
+      });
+    }).catch(() => {});
+  }, []);
   if (exams.length === 0) return <p className="muted small">No upcoming exams.</p>;
   return (
     <div className="list">
