@@ -128,11 +128,30 @@ const FeePaymentSchema = new mongoose.Schema({
 FeePaymentSchema.index({ studentId: 1, month: 1 }, { unique: true });
 
 // Exam / Test announcements (sent to selected students)
+// sentVia / readBy are additive — old exams without these fields stay valid.
 const ExamSchema = new mongoose.Schema({
   title: { type: String, required: true },
   description: String,
   examDate: String, // YYYY-MM-DD
   studentIds: [{ type: mongoose.Schema.Types.ObjectId }], // empty = all students
+  // Tracks WhatsApp / channel deliveries the teacher has confirmed for each student.
+  sentVia: {
+    type: [{
+      studentId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      channel:   { type: String, default: 'whatsapp' },
+      sentAt:    { type: Date, default: Date.now },
+    }],
+    default: [],
+  },
+  // Tracks students/parents who have opened this exam in the app.
+  readBy: {
+    type: [{
+      studentId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      readAt:    { type: Date, default: Date.now },
+    }],
+    default: [],
+  },
+  updatedAt: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -1871,6 +1890,86 @@ app.get('/api/exams', authenticate, async (req, res) => {
 app.delete('/api/exams/:id', authenticate, teacherOnly, async (req, res) => {
   try {
     await Exam.findByIdAndDelete(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Edit an existing exam. Only the fields the teacher actually sends are touched —
+// sentVia / readBy delivery history is preserved across edits.
+app.put('/api/exams/:id', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const { title, description, examDate, studentIds } = req.body;
+    const patch = {};
+    if (typeof title === 'string') {
+      if (!title.trim()) return res.status(400).json({ error: 'Title required' });
+      patch.title = title;
+    }
+    if (typeof description === 'string') patch.description = description;
+    if (typeof examDate === 'string') patch.examDate = examDate;
+    if (Array.isArray(studentIds)) patch.studentIds = studentIds;
+    patch.updatedAt = new Date();
+    const exam = await Exam.findByIdAndUpdate(req.params.id, patch, { new: true });
+    if (!exam) return res.status(404).json({ error: 'Exam not found' });
+    res.json({ ok: true, exam });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Teacher confirms they sent the WhatsApp / SMS for a particular student.
+// Safe to call repeatedly — same (examId, studentId) won't duplicate.
+app.post('/api/exams/:id/mark-sent', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const { studentId, channel } = req.body || {};
+    if (!studentId) return res.status(400).json({ error: 'studentId required' });
+    if (!mongoose.Types.ObjectId.isValid(studentId)) return res.status(400).json({ error: 'Invalid studentId' });
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ error: 'Exam not found' });
+    const already = (exam.sentVia || []).some(e => String(e.studentId) === String(studentId));
+    if (!already) {
+      exam.sentVia.push({ studentId, channel: channel || 'whatsapp', sentAt: new Date() });
+      await exam.save();
+    }
+    res.json({ ok: true, exam });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Teacher can roll back a delivery confirmation if they marked it by mistake.
+app.post('/api/exams/:id/unmark-sent', authenticate, teacherOnly, async (req, res) => {
+  try {
+    const { studentId } = req.body || {};
+    if (!studentId) return res.status(400).json({ error: 'studentId required' });
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ error: 'Exam not found' });
+    exam.sentVia = (exam.sentVia || []).filter(e => String(e.studentId) !== String(studentId));
+    await exam.save();
+    res.json({ ok: true, exam });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Student / parent opens an exam — record the view so the teacher can see who saw it.
+app.post('/api/exams/:id/mark-read', authenticate, async (req, res) => {
+  try {
+    let studentId = null;
+    if (req.user.role === 'parent' || req.user.role === 'student') {
+      studentId = req.user.studentId;
+    } else if (req.user.role === 'teacher') {
+      studentId = req.body?.studentId || null;
+    }
+    if (!studentId) return res.status(400).json({ error: 'studentId required' });
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ error: 'Exam not found' });
+    const already = (exam.readBy || []).some(e => String(e.studentId) === String(studentId));
+    if (!already) {
+      exam.readBy.push({ studentId, readAt: new Date() });
+      await exam.save();
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
