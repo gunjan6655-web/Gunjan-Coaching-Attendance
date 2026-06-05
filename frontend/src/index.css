@@ -612,6 +612,41 @@ textarea { resize: vertical; min-height: 60px; }
 .stat.red { color: #dc2626; }
 .stat.muted { color: #888; }
 
+/* Clickable stat cards (Today tab — tap a card to filter the list below) */
+.stat-clickable {
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.08s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.stat-clickable:hover {
+  border-color: #c8c2b6;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+.stat-clickable:active { transform: scale(0.97); }
+.stat-clickable.active {
+  border-color: currentColor;
+  box-shadow: 0 0 0 2px currentColor inset, 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+.stat-clickable.blue.active { color: #1e40af; }
+
+.filter-chip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.filter-chip-label { font-size: 13px; }
+.filter-chip-label strong { text-transform: capitalize; }
+
 .summary-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1140,6 +1175,71 @@ textarea { resize: vertical; min-height: 60px; }
   color: #6b7280;
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Clickable fee row variant — opens StudentFeeDetailModal */
+.fee-row-clickable {
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  width: 100%;
+  transition: transform 0.08s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.fee-row-clickable:hover {
+  border-color: #c8c2b6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.fee-row-clickable:active { transform: scale(0.995); }
+.fee-row-chevron {
+  flex-shrink: 0;
+  color: #94a3b8;
+  margin-left: 4px;
+}
+
+/* Fee detail modal — attendance and fee math at a glance */
+.fee-detail-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 4px;
+}
+.fee-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.fee-detail-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 8px;
+  text-align: center;
+}
+.fee-detail-card strong {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+.fee-detail-card span {
+  font-size: 12px;
+  color: #64748b;
+}
+.fee-detail-card.green { background: #f0fdf4; border-color: #bbf7d0; }
+.fee-detail-card.green strong { color: #16a34a; }
+.fee-detail-card.red   { background: #fef2f2; border-color: #fecaca; }
+.fee-detail-card.red   strong { color: #dc2626; }
+.fee-detail-card.blue  { background: #eff6ff; border-color: #bfdbfe; }
+.fee-detail-card.blue  strong { color: #1e40af; }
+@media (max-width: 480px) {
+  .fee-detail-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .fee-detail-card { padding: 10px 4px; }
+  .fee-detail-card strong { font-size: 18px; }
+  .fee-detail-card span { font-size: 11px; }
 }
 
 /* Mobile tweaks */
@@ -2179,7 +2279,7 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 /* Wrappers hold the card + its expand panel; parent flex gap spaces wrappers */
-.attendance-card-wrap, .pending-fee-row-wrap { display: block; }
+.attendance-card-wrap, .pending-fee-row-wrap, .exam-card-wrap { display: block; }
 
 /* Chevron that rotates when a card is expanded */
 .expand-chevron {
