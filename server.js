@@ -695,16 +695,70 @@ app.get('/api/attendance/student/:studentId', authenticate, async (req, res) => 
 app.get('/api/attendance/summary/:studentId', authenticate, async (req, res) => {
   try {
     if (!parentScopeCheck(req, req.params.studentId)) return res.status(403).json({ error: 'Forbidden' });
+    const student = await Student.findById(req.params.studentId);
+    if (!student) return res.status(404).json({ error: 'Not found' });
     const records = await Attendance.find({ studentId: req.params.studentId });
     const present = records.filter(r => r.status === 'present').length;
     const absent = records.filter(r => r.status === 'absent').length;
-    const total = present + absent;
-    const percentage = total ? Math.round((present / total) * 100) : 0;
+
+    // Work out off-days from the student's batch (Sunday-only default).
+    const config = await Config.findOne();
+    let offDays = [0];
+    if (student.batchId && config?.batches?.length) {
+      const batch = config.batches.find(b => String(b._id) === String(student.batchId));
+      if (batch?.weeklyOffDays?.length) offDays = batch.weeklyOffDays;
+    }
+
+    // Establish enrollment date (fall back to joinDate, then today as safety).
+    const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
+    let enrolled;
+    if (student.enrollmentDate && /^\d{4}-\d{2}-\d{2}/.test(student.enrollmentDate)) {
+      enrolled = new Date(student.enrollmentDate + 'T00:00:00');
+    } else if (student.joinDate) {
+      enrolled = new Date(student.joinDate); enrolled.setHours(0, 0, 0, 0);
+    } else {
+      enrolled = new Date(todayD);
+    }
+
+    // Count working days from enrollment → today. Days a student "should have"
+    // shown up. Unmarked days now count against the percentage, which is what
+    // the teacher actually wants to see (a student present 7/31 days is 22 %,
+    // not 100 % just because the teacher didn't mark the missed days).
+    let workingDays = 0;
+    const cursor = new Date(enrolled);
+    while (cursor <= todayD) {
+      if (!offDays.includes(cursor.getDay())) workingDays++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    const percentage = workingDays ? Math.min(100, Math.round((present / workingDays) * 100)) : 0;
+
+    // Same calculation but restricted to the last 30 days — what the
+    // "Attendance — Last 30 Days" panel needs.
+    const isoOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const thirtyAgo = new Date(todayD); thirtyAgo.setDate(todayD.getDate() - 29);
+    const last30Start = enrolled > thirtyAgo ? enrolled : thirtyAgo;
+    const last30StartISO = isoOf(last30Start);
+    const last30Records = records.filter(r => r.date >= last30StartISO);
+    const last30Present = last30Records.filter(r => r.status === 'present').length;
+    const last30Absent  = last30Records.filter(r => r.status === 'absent').length;
+    let last30Working = 0;
+    const cur2 = new Date(last30Start);
+    while (cur2 <= todayD) {
+      if (!offDays.includes(cur2.getDay())) last30Working++;
+      cur2.setDate(cur2.getDate() + 1);
+    }
+    const last30Pct = last30Working ? Math.min(100, Math.round((last30Present / last30Working) * 100)) : 0;
+
     const absentDays = records
       .filter(r => r.status === 'absent')
       .map(r => ({ date: r.date, reason: r.reason || 'No reason given' }))
       .sort((a, b) => b.date.localeCompare(a.date));
-    res.json({ present, absent, total, percentage, absentDays });
+
+    res.json({
+      present, absent, total: present + absent, percentage, workingDays,
+      last30: { present: last30Present, absent: last30Absent, percentage: last30Pct, workingDays: last30Working },
+      absentDays,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -721,16 +775,40 @@ app.get('/api/attendance/summary-all', authenticate, teacherOnly, async (req, re
         absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
       }},
     ]);
+    // Pull all students (need enrollment dates + batch for proper percentage).
+    const students = await Student.find({ pendingApproval: { $ne: true } }).select('_id batchId enrollmentDate joinDate');
+    const config = await Config.findOne();
+    const batchOffMap = new Map();
+    (config?.batches || []).forEach(b => batchOffMap.set(String(b._id), b.weeklyOffDays?.length ? b.weeklyOffDays : [0]));
+    const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
+
+    const countsByStudent = new Map(grouped.map(g => [String(g._id), { present: g.present, absent: g.absent }]));
     const summaries = {};
-    grouped.forEach(g => {
-      const total = g.present + g.absent;
-      summaries[String(g._id)] = {
-        present: g.present,
-        absent: g.absent,
-        total,
-        percentage: total ? Math.round((g.present / total) * 100) : 0,
+    for (const s of students) {
+      const c = countsByStudent.get(String(s._id)) || { present: 0, absent: 0 };
+      const offDays = batchOffMap.get(String(s.batchId)) || [0];
+      let enrolled;
+      if (s.enrollmentDate && /^\d{4}-\d{2}-\d{2}/.test(s.enrollmentDate)) {
+        enrolled = new Date(s.enrollmentDate + 'T00:00:00');
+      } else if (s.joinDate) {
+        enrolled = new Date(s.joinDate); enrolled.setHours(0, 0, 0, 0);
+      } else {
+        enrolled = new Date(todayD);
+      }
+      let workingDays = 0;
+      const cursor = new Date(enrolled);
+      while (cursor <= todayD) {
+        if (!offDays.includes(cursor.getDay())) workingDays++;
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      summaries[String(s._id)] = {
+        present: c.present,
+        absent: c.absent,
+        total: c.present + c.absent,
+        workingDays,
+        percentage: workingDays ? Math.min(100, Math.round((c.present / workingDays) * 100)) : 0,
       };
-    });
+    }
     res.json({ summaries });
   } catch (err) {
     res.status(500).json({ error: err.message });
