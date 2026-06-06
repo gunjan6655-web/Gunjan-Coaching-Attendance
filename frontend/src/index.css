@@ -126,9 +126,10 @@ h3 { font-size: 18px; margin-bottom: 8px; }
 .features h2 { text-align: center; margin-bottom: 32px; }
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 20px;
 }
+.feature-grid .card-wide { grid-column: 1 / -1; }
 .card {
   background: #fff;
   padding: 24px;
@@ -2411,4 +2412,73 @@ textarea { resize: vertical; min-height: 60px; }
   .filter-pill { font-size: 13px; padding: 8px 10px; min-height: 40px; }
   .filter-pill-label { max-width: 120px; }
   .filter-option { padding: 14px 12px; font-size: 15px; }
+}
+
+/* ============================
+   FEES TAB — per-batch breakdown under the All-groups summary
+   Helps the teacher see WHERE the grand total comes from when batch
+   totals don't appear to add up (usually because some students have
+   no batch assigned).
+   ============================ */
+.batch-breakdown {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+.batch-breakdown h4 {
+  font-size: 14px;
+  color: #475569;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.batch-breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.batch-breakdown-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.batch-breakdown-row:hover { border-color: #c8c2b6; background: #fafafa; }
+.batch-breakdown-row.warn { background: #fff7ed; border-color: #fed7aa; color: #9a3412; }
+.batch-breakdown-row.warn:hover { background: #ffedd5; }
+.batch-breakdown-name { font-weight: 600; color: #1f2937; }
+.batch-breakdown-row.warn .batch-breakdown-name { color: #9a3412; }
+.batch-breakdown-count {
+  font-size: 12px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+.batch-breakdown-total {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #16a34a;
+  min-width: 80px;
+  text-align: right;
+}
+.batch-breakdown-row.warn .batch-breakdown-total { color: #c2410c; }
+@media (max-width: 480px) {
+  .batch-breakdown-row {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+  }
+  .batch-breakdown-name { grid-column: 1; grid-row: 1; }
+  .batch-breakdown-count { grid-column: 1; grid-row: 2; font-size: 11px; }
+  .batch-breakdown-total { grid-column: 2; grid-row: 1 / 3; align-self: center; }
 }
