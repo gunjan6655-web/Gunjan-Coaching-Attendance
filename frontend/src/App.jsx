@@ -335,7 +335,7 @@ function Landing({ info, onSignIn, onRegister }) {
             <h3>Fees</h3>
             <p>Class-based monthly fees. Per-day auto-calculated. Parents see their child's full breakdown.</p>
           </div>
-          <div className="card">
+          <div className="card card-wide">
             <MessageCircle size={28} color="#9333ea" />
             <h3>Chat</h3>
             <p>Group chat for all students, private messages to teacher, and fee reminders for parents.</p>
@@ -822,7 +822,9 @@ function GroupFilterButton({ classes, batches, classFilter, batchFilter, onChang
   const clear = () => { setTempClass(''); setTempBatch(''); onChange({ classFilter: '', batchFilter: '' }); setOpen(false); };
 
   // What the pill shows when closed
-  const batchName = (batches || []).find(b => String(b._id) === String(batchFilter))?.name;
+  const batchName = batchFilter === '__no_batch__'
+    ? '(No batch)'
+    : (batches || []).find(b => String(b._id) === String(batchFilter))?.name;
   let label = 'All groups';
   if (classFilter && batchName) label = `${classFilter} · ${batchName}`;
   else if (classFilter)        label = classFilter;
@@ -884,6 +886,10 @@ function GroupFilterButton({ classes, batches, classFilter, batchFilter, onChang
                 <label className="filter-option">
                   <input type="radio" name="gf-batch" checked={!tempBatch} onChange={() => setTempBatch('')} />
                   <span>All batches</span>
+                </label>
+                <label className="filter-option">
+                  <input type="radio" name="gf-batch" checked={tempBatch === '__no_batch__'} onChange={() => setTempBatch('__no_batch__')} />
+                  <span>(No batch assigned)</span>
                 </label>
                 {batches.map(b => (
                   <label key={b._id} className="filter-option">
@@ -1269,8 +1275,14 @@ function TodayTab({ info, announcements }) {
   const allClasses = [...new Set(students.map(s => s.className).filter(Boolean))].sort();
   const q = search.trim().toLowerCase();
   // Use String() on both sides so ObjectId vs string never silently fails to match.
+  // Special "__no_batch__" value matches students whose batchId is empty/missing.
+  const matchesBatch = (s) => {
+    if (!batchFilter) return true;
+    if (batchFilter === '__no_batch__') return !s.batchId;
+    return String(s.batchId) === String(batchFilter);
+  };
   const visible = [...students]
-    .filter(s => (!batchFilter || String(s.batchId) === String(batchFilter)) && (!classFilter || s.className === classFilter))
+    .filter(s => matchesBatch(s) && (!classFilter || s.className === classFilter))
     .filter(s => !q || s.name.toLowerCase().includes(q) || String(s.rollNumber || '').toLowerCase().includes(q))
     .sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
   const birthdayStudents = visible.filter(s => isBirthdayToday(s.birthday));
@@ -1611,7 +1623,8 @@ function StudentsTab({ info, refreshInfo }) {
     (s.rollNumber || '').includes(search) ||
     (s.phone || '').includes(search)
   );
-  if (batchFilter) filtered = filtered.filter(s => String(s.batchId) === String(batchFilter));
+  if (batchFilter === '__no_batch__') filtered = filtered.filter(s => !s.batchId);
+  else if (batchFilter) filtered = filtered.filter(s => String(s.batchId) === String(batchFilter));
   if (classFilter) filtered = filtered.filter(s => s.className === classFilter);
   filtered = [...filtered].sort((a, b) => {
     if (sortBy === 'name') return a.name.localeCompare(b.name);
@@ -2364,7 +2377,8 @@ function FeesTab({ info }) {
   if (!data) return <p className="muted">No data.</p>;
 
   let rows = [...(data.students || [])];
-  if (batchFilter) rows = rows.filter(s => String(s.batchId) === String(batchFilter));
+  if (batchFilter === '__no_batch__') rows = rows.filter(s => !s.batchId);
+  else if (batchFilter) rows = rows.filter(s => String(s.batchId) === String(batchFilter));
   if (classFilter) rows = rows.filter(s => s.className === classFilter);
   rows = rows.sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
 
@@ -2401,6 +2415,52 @@ function FeesTab({ info }) {
         <div className="stat-big blue"><strong>{formatRupee(Math.round(dailyTotal))}</strong><span>Total / working day</span></div>
         <div className="stat-big"><strong>{rows.length}</strong><span>Students</span></div>
       </div>
+
+      {/* When viewing All groups, show how the total splits across batches so
+          the teacher can see exactly where each rupee comes from. Tap a row to
+          drill into that batch. Includes a "No batch assigned" row so money
+          isn't silently hidden. */}
+      {!batchFilter && !classFilter && rows.length > 0 && (info.batches?.length || 0) > 0 && (() => {
+        const byBatch = new Map();
+        let noBatchTotal = 0, noBatchCount = 0;
+        rows.forEach(r => {
+          const fee = r.fees?.monthlyFee || 0;
+          if (!r.batchId) { noBatchTotal += fee; noBatchCount++; return; }
+          const key = String(r.batchId);
+          if (!byBatch.has(key)) byBatch.set(key, { total: 0, count: 0 });
+          const entry = byBatch.get(key);
+          entry.total += fee; entry.count++;
+        });
+        const items = (info.batches || [])
+          .map(b => ({ id: String(b._id), name: b.name, ...(byBatch.get(String(b._id)) || { total: 0, count: 0 }) }))
+          .filter(b => b.count > 0);
+        if (items.length === 0 && noBatchCount === 0) return null;
+        return (
+          <div className="batch-breakdown">
+            <h4 style={{ margin: '0 0 6px' }}>Where the {formatRupee(monthlyTotal)} comes from</h4>
+            <div className="batch-breakdown-list">
+              {items.map(b => (
+                <button key={b.id} type="button" className="batch-breakdown-row" onClick={() => setBatchFilter(b.id)}>
+                  <span className="batch-breakdown-name">{b.name}</span>
+                  <span className="batch-breakdown-count">{b.count} student{b.count !== 1 ? 's' : ''}</span>
+                  <span className="batch-breakdown-total">{formatRupee(b.total)}</span>
+                </button>
+              ))}
+              {noBatchCount > 0 && (
+                <button type="button" className="batch-breakdown-row warn" onClick={() => setBatchFilter('__no_batch__')}>
+                  <span className="batch-breakdown-name">No batch assigned</span>
+                  <span className="batch-breakdown-count">{noBatchCount} student{noBatchCount !== 1 ? 's' : ''}</span>
+                  <span className="batch-breakdown-total">{formatRupee(noBatchTotal)}</span>
+                </button>
+              )}
+            </div>
+            <p className="small muted" style={{ margin: '6px 0 0' }}>
+              Tap a row to filter the list below.
+              {noBatchCount > 0 && ' "No batch assigned" students are why per-batch totals don\'t add up to the grand total — go to Students tab to assign them a batch.'}
+            </p>
+          </div>
+        );
+      })()}
 
       {(batchFilter || classFilter) && rows.length === 0 && (
         <div className="empty filter-empty">
@@ -2575,20 +2635,27 @@ function StudentFeeDetailModal({ student, month, info, onClose, onChanged }) {
       {!summary ? (
         <p className="muted small">Loading attendance…</p>
       ) : (
-        <div className="fee-detail-grid">
-          <div className="fee-detail-card green">
-            <strong>{summary.present}</strong>
-            <span>Present</span>
+        <>
+          <div className="fee-detail-grid">
+            <div className="fee-detail-card green">
+              <strong>{summary.present}</strong>
+              <span>Present</span>
+            </div>
+            <div className="fee-detail-card red">
+              <strong>{summary.absent}</strong>
+              <span>Absent</span>
+            </div>
+            <div className="fee-detail-card blue">
+              <strong>{summary.percentage}%</strong>
+              <span>Attendance</span>
+            </div>
           </div>
-          <div className="fee-detail-card red">
-            <strong>{summary.absent}</strong>
-            <span>Absent</span>
-          </div>
-          <div className="fee-detail-card blue">
-            <strong>{summary.percentage}%</strong>
-            <span>Attendance</span>
-          </div>
-        </div>
+          {summary.workingDays > 0 && (
+            <p className="small muted" style={{ textAlign: 'center', margin: '6px 0 0' }}>
+              {summary.present} present out of {summary.workingDays} class days since enrollment
+            </p>
+          )}
+        </>
       )}
 
       {/* This month's fee math */}
@@ -4849,9 +4916,17 @@ function StudentDetailModal({ student, info, onClose, onEdit }) {
               <h3><BarChart3 size={14} /> Attendance — Last 30 Days</h3>
               {summary && (
                 <div className="row" style={{ gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
-                  <div><strong style={{ color: '#16a34a', fontSize: 22 }}>{summary.present}</strong> <span className="muted small">days present</span></div>
-                  <div><strong style={{ color: '#ef4444', fontSize: 22 }}>{summary.absent}</strong> <span className="muted small">days absent</span></div>
-                  <div><strong style={{ color: '#0a84ff', fontSize: 22 }}>{summary.percentage}%</strong> <span className="muted small">attendance</span></div>
+                  <div><strong style={{ color: '#16a34a', fontSize: 22 }}>{summary.last30?.present ?? summary.present}</strong> <span className="muted small">days present</span></div>
+                  <div><strong style={{ color: '#ef4444', fontSize: 22 }}>{summary.last30?.absent ?? summary.absent}</strong> <span className="muted small">days absent</span></div>
+                  <div>
+                    <strong style={{ color: '#0a84ff', fontSize: 22 }}>{summary.last30?.percentage ?? summary.percentage}%</strong>{' '}
+                    <span className="muted small">attendance</span>
+                    {summary.last30?.workingDays > 0 && (
+                      <span className="muted small" style={{ marginLeft: 6 }}>
+                        ({summary.last30.present} of {summary.last30.workingDays} class days)
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
               <div className="att-bar-chart">
