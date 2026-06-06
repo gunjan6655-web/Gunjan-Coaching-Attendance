@@ -9,7 +9,8 @@ import {
   Cake, Share2, MessageCircle, CalendarDays, Copy,
   Wallet, RotateCcw, KeyRound, IndianRupee, Layers,
   Camera, Sparkles, RefreshCw, AlertCircle, Inbox, Hash, Check,
-  Mic, MicOff, Video, UserCheck, Navigation, Download, FileSpreadsheet, Paperclip
+  Mic, MicOff, Video, UserCheck, Navigation, Download, FileSpreadsheet, Paperclip,
+  Filter
 } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
@@ -801,6 +802,151 @@ function LazyTab({ active, children }) {
 }
 
 // ============================
+// SHARED FILTER PILLS — combined class + batch picker, and status picker
+// Both render as a pill button that opens a Modal sheet on tap. State stays
+// in the parent (batchFilter / classFilter / statusFilter), so existing logic
+// in TodayTab / FeesTab keeps working unchanged.
+// ============================
+function GroupFilterButton({ classes, batches, classFilter, batchFilter, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [tempClass, setTempClass] = useState(classFilter || '');
+  const [tempBatch, setTempBatch] = useState(batchFilter || '');
+
+  const openSheet = () => {
+    setTempClass(classFilter || '');
+    setTempBatch(batchFilter || '');
+    setOpen(true);
+  };
+
+  const apply = () => { onChange({ classFilter: tempClass, batchFilter: tempBatch }); setOpen(false); };
+  const clear = () => { setTempClass(''); setTempBatch(''); onChange({ classFilter: '', batchFilter: '' }); setOpen(false); };
+
+  // What the pill shows when closed
+  const batchName = (batches || []).find(b => String(b._id) === String(batchFilter))?.name;
+  let label = 'All groups';
+  if (classFilter && batchName) label = `${classFilter} · ${batchName}`;
+  else if (classFilter)        label = classFilter;
+  else if (batchName)          label = batchName;
+
+  const hasClasses = (classes || []).length > 0;
+  const hasBatches = (batches || []).length > 0;
+
+  // Nothing to filter by? Just show a quiet placeholder.
+  if (!hasClasses && !hasBatches) {
+    return <span className="filter-pill disabled" title="Add classes or batches in Settings"><Filter size={14} /> No groups yet</span>;
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className={'filter-pill' + ((classFilter || batchFilter) ? ' active' : '')}
+        onClick={openSheet}
+        title="Filter by class and/or batch"
+      >
+        <Filter size={14} /> <span className="filter-pill-label">{label}</span>
+        {(classFilter || batchFilter) && (
+          <span
+            className="filter-pill-clear"
+            role="button"
+            tabIndex={0}
+            title="Clear filter"
+            onClick={(e) => { e.stopPropagation(); onChange({ classFilter: '', batchFilter: '' }); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onChange({ classFilter: '', batchFilter: '' }); } }}
+          ><X size={11} /></span>
+        )}
+        <ChevronDown size={12} />
+      </button>
+
+      {open && (
+        <Modal onClose={() => setOpen(false)} title="Filter by class & batch">
+          {hasClasses && (
+            <>
+              <h4 style={{ margin: '0 0 8px' }}>Class</h4>
+              <div className="filter-options">
+                <label className="filter-option">
+                  <input type="radio" name="gf-class" checked={!tempClass} onChange={() => setTempClass('')} />
+                  <span>All classes</span>
+                </label>
+                {classes.map(c => (
+                  <label key={c} className="filter-option">
+                    <input type="radio" name="gf-class" checked={tempClass === c} onChange={() => setTempClass(c)} />
+                    <span>{c}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+          {hasBatches && (
+            <>
+              <h4 style={{ margin: '12px 0 8px' }}>Batch</h4>
+              <div className="filter-options">
+                <label className="filter-option">
+                  <input type="radio" name="gf-batch" checked={!tempBatch} onChange={() => setTempBatch('')} />
+                  <span>All batches</span>
+                </label>
+                {batches.map(b => (
+                  <label key={b._id} className="filter-option">
+                    <input type="radio" name="gf-batch" checked={String(tempBatch) === String(b._id)} onChange={() => setTempBatch(String(b._id))} />
+                    <span>{b.name}{b.startTime ? <span className="muted small"> · {b.startTime}</span> : null}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+          <div className="modal-buttons" style={{ marginTop: 14 }}>
+            <button className="btn btn-outline" onClick={clear}>Clear all</button>
+            <button className="btn btn-primary" onClick={apply}>Apply</button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+// Status (Present / Absent / Not marked / All) picker — single pill button.
+// Accepts a `counts` object so the sheet can show "Present (10)" inline.
+function StatusFilterButton({ value, onChange, counts }) {
+  const [open, setOpen] = useState(false);
+  const options = [
+    { value: 'all',      label: 'All students',  count: counts?.total ?? 0 },
+    { value: 'present',  label: 'Present only',  count: counts?.present ?? 0 },
+    { value: 'absent',   label: 'Absent only',   count: counts?.absent ?? 0 },
+    { value: 'unmarked', label: 'Not marked only', count: counts?.unmarked ?? 0 },
+  ];
+  const current = options.find(o => o.value === value) || options[0];
+  return (
+    <>
+      <button
+        type="button"
+        className={'filter-pill' + (value !== 'all' ? ' active' : '')}
+        onClick={() => setOpen(true)}
+        title="Choose which students to show"
+      >
+        <Eye size={14} /> <span className="filter-pill-label">Show: {current.label}</span>
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <Modal onClose={() => setOpen(false)} title="Show which students?">
+          <div className="filter-options">
+            {options.map(opt => (
+              <label
+                key={opt.value}
+                className="filter-option"
+                onClick={() => { onChange(opt.value); setOpen(false); }}
+              >
+                <input type="radio" name="sf" readOnly checked={value === opt.value} />
+                <span>{opt.label} <span className="muted small">({opt.count})</span></span>
+              </label>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+// ============================
 // TEACHER DASHBOARD
 // ============================
 function TeacherDashboard({ info, announcements, onSignOut, refreshInfo }) {
@@ -1215,39 +1361,10 @@ function TodayTab({ info, announcements }) {
       )}
 
       <div className="stat-row">
-        <div className="stat"><strong>{today}</strong></div>
-        <button
-          type="button"
-          className={'stat stat-clickable green' + (statusFilter === 'present' ? ' active' : '')}
-          onClick={() => setStatusFilter(statusFilter === 'present' ? 'all' : 'present')}
-          title="Tap to see only present students"
-        >
-          <CheckCircle size={20} /> {presentCount} Present
-        </button>
-        <button
-          type="button"
-          className={'stat stat-clickable red' + (statusFilter === 'absent' ? ' active' : '')}
-          onClick={() => setStatusFilter(statusFilter === 'absent' ? 'all' : 'absent')}
-          title="Tap to see only absent students"
-        >
-          <XCircle size={20} /> {absentCount} Absent
-        </button>
-        <button
-          type="button"
-          className={'stat stat-clickable muted' + (statusFilter === 'unmarked' ? ' active' : '')}
-          onClick={() => setStatusFilter(statusFilter === 'unmarked' ? 'all' : 'unmarked')}
-          title="Tap to see only unmarked students"
-        >
-          <Info size={20} /> {unmarkedCount} Not marked
-        </button>
-        <button
-          type="button"
-          className={'stat stat-clickable blue' + (statusFilter === 'all' ? ' active' : '')}
-          onClick={() => setStatusFilter('all')}
-          title="Show everyone"
-        >
-          <Users size={20} /> {visible.length} Total
-        </button>
+        <div className="stat green"><CheckCircle size={20} /> {presentCount} Present</div>
+        <div className="stat red"><XCircle size={20} /> {absentCount} Absent</div>
+        <div className="stat muted"><Info size={20} /> {unmarkedCount} Not marked</div>
+        <div className="stat blue"><Users size={20} /> {visible.length} Total</div>
       </div>
       {statusFilter !== 'all' && (
         <div className="filter-chip-row">
@@ -1273,18 +1390,18 @@ function TodayTab({ info, announcements }) {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or roll" />
           {search && <button className="btn-link small" onClick={() => setSearch('')} title="Clear">✕</button>}
         </div>
-        {(info.batches?.length || 0) > 0 && (
-          <select className="sort-select" value={batchFilter} onChange={e => setBatchFilter(e.target.value)}>
-            <option value="">All batches</option>
-            {info.batches.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
-          </select>
-        )}
-        {allClasses.length > 0 && (
-          <select className="sort-select" value={classFilter} onChange={e => setClassFilter(e.target.value)}>
-            <option value="">All classes</option>
-            {allClasses.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        )}
+        <GroupFilterButton
+          classes={allClasses}
+          batches={info.batches || []}
+          classFilter={classFilter}
+          batchFilter={batchFilter}
+          onChange={({ classFilter: c, batchFilter: b }) => { setClassFilter(c); setBatchFilter(b); }}
+        />
+        <StatusFilterButton
+          value={statusFilter}
+          onChange={setStatusFilter}
+          counts={{ total: visible.length, present: presentCount, absent: absentCount, unmarked: unmarkedCount }}
+        />
         {!offDay && (
           <button className="btn btn-green" onClick={markAllPresent} disabled={bulkLoading}>
             <CheckCircle size={16} /> {bulkLoading ? 'Marking...' : ((batchFilter || classFilter) ? 'Mark Shown Present' : 'Mark Everyone Present')}
@@ -1302,6 +1419,21 @@ function TodayTab({ info, announcements }) {
           </button>
         )}
       </div>
+      {(batchFilter || classFilter) && visible.length === 0 && (
+        <div className="empty filter-empty">
+          <Filter size={32} color="#d97706" />
+          <h4 style={{ margin: '8px 0 4px' }}>No students match this filter</h4>
+          <p className="muted small" style={{ margin: 0 }}>
+            None of your students are tagged with{' '}
+            {classFilter && <strong>"{classFilter}"</strong>}
+            {classFilter && batchFilter && ' and '}
+            {batchFilter && <strong>this batch</strong>}.
+            <br />
+            Open the <strong>Students tab</strong> to edit each student's class/batch, or
+            <button className="btn-link small" onClick={() => { setClassFilter(''); setBatchFilter(''); }}> clear the filter</button>.
+          </p>
+        </div>
+      )}
 
       <div className="list">
         {displayed.length === 0 && statusFilter !== 'all' && (
@@ -2255,18 +2387,13 @@ function FeesTab({ info }) {
           <label style={{ margin: 0 }}>Month:</label>
           <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="sort-select" />
         </div>
-        {(info.classes?.length || 0) > 0 && (
-          <select className="sort-select" value={classFilter} onChange={e => setClassFilter(e.target.value)}>
-            <option value="">All classes</option>
-            {info.classes.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-          </select>
-        )}
-        {(info.batches?.length || 0) > 0 && (
-          <select className="sort-select" value={batchFilter} onChange={e => setBatchFilter(e.target.value)}>
-            <option value="">All batches</option>
-            {info.batches.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
-          </select>
-        )}
+        <GroupFilterButton
+          classes={(info.classes || []).map(c => c.name)}
+          batches={info.batches || []}
+          classFilter={classFilter}
+          batchFilter={batchFilter}
+          onChange={({ classFilter: c, batchFilter: b }) => { setClassFilter(c); setBatchFilter(b); }}
+        />
       </div>
 
       <div className="summary-stats">
@@ -2274,6 +2401,32 @@ function FeesTab({ info }) {
         <div className="stat-big blue"><strong>{formatRupee(Math.round(dailyTotal))}</strong><span>Total / working day</span></div>
         <div className="stat-big"><strong>{rows.length}</strong><span>Students</span></div>
       </div>
+
+      {(batchFilter || classFilter) && rows.length === 0 && (
+        <div className="empty filter-empty">
+          <Filter size={32} color="#d97706" />
+          <h4 style={{ margin: '8px 0 4px' }}>No students in this group</h4>
+          <p className="muted small" style={{ margin: 0 }}>
+            None of your students are tagged with{' '}
+            {classFilter && <strong>"{classFilter}"</strong>}
+            {classFilter && batchFilter && ' and '}
+            {batchFilter && <strong>this batch</strong>}.
+            Open the <strong>Students tab</strong> and edit each student to assign them, or
+            <button className="btn-link small" onClick={() => { setClassFilter(''); setBatchFilter(''); }}> clear the filter</button>.
+          </p>
+        </div>
+      )}
+      {rows.length > 0 && monthlyTotal === 0 && (
+        <div className="empty filter-empty" style={{ background: '#fff7ed', borderColor: '#fed7aa' }}>
+          <IndianRupee size={32} color="#c2410c" />
+          <h4 style={{ margin: '8px 0 4px' }}>Total shows ₹0 because no fees are set</h4>
+          <p className="muted small" style={{ margin: 0 }}>
+            These {rows.length} student{rows.length !== 1 ? 's' : ''} have no monthly fee set.
+            Open <strong>Settings → Classes</strong> to set a class-level fee (everyone in that class will inherit it),
+            or edit each student individually in the <strong>Students tab</strong>.
+          </p>
+        </div>
+      )}
 
       {Object.keys(groups).length > 0 && (
         <div className="chart-card">
