@@ -2303,3 +2303,112 @@ textarea { resize: vertical; min-height: 60px; }
   to   { opacity: 1; transform: translateY(0); }
 }
 .att-expand .info-dl, .fee-expand .info-dl { margin: 0; }
+
+/* =====================================================================
+   FILTER PILLS (combined class+batch + status picker)
+   Used in TodayTab and FeesTab toolbars. Mobile-friendly tap targets.
+   ===================================================================== */
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid #d4cfc4;
+  color: #1f2937;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+  min-height: 38px;
+}
+.filter-pill:hover { border-color: #b3aa97; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04); }
+.filter-pill:active { transform: scale(0.98); }
+.filter-pill.active {
+  background: #fff7ed;
+  border-color: #fb923c;
+  color: #9a3412;
+}
+.filter-pill.disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: not-allowed;
+  border-color: #e5e7eb;
+}
+.filter-pill-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.filter-pill-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(154, 52, 18, 0.15);
+  color: #9a3412;
+  margin-left: 2px;
+  cursor: pointer;
+}
+.filter-pill-clear:hover { background: rgba(154, 52, 18, 0.25); }
+
+/* Vertical list of radio options inside the filter sheet */
+.filter-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.filter-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 15px;
+  transition: background 0.1s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.filter-option:last-child { border-bottom: none; }
+.filter-option:hover { background: #f9fafb; }
+.filter-option input[type="radio"] {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  accent-color: #fb923c;
+  margin: 0;
+}
+.filter-option span { flex: 1; }
+
+/* Helpful "filter found nothing" empty state */
+.filter-empty {
+  background: #fffbeb;
+  border: 1px dashed #fcd34d;
+  border-radius: 12px;
+  padding: 20px 16px;
+  text-align: center;
+  margin: 12px 0;
+}
+.filter-empty h4 { color: #92400e; font-size: 16px; }
+.filter-empty p { color: #78350f; }
+.filter-empty .btn-link {
+  color: #c2410c;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+@media (max-width: 480px) {
+  .filter-pill { font-size: 13px; padding: 8px 10px; min-height: 40px; }
+  .filter-pill-label { max-width: 120px; }
+  .filter-option { padding: 14px 12px; font-size: 15px; }
+}
