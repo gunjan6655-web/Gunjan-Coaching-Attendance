@@ -1083,8 +1083,13 @@ const computeStudentFees = (student, config, yyyymm) => {
 
   const { working, total } = workingDaysInMonth(year, month, offDays);
 
-  // Manual fee per student (set by teacher when adding/editing the student).
-  const monthlyFee = Number(student.monthlyFee) || 0;
+  // Monthly fee: prefer per-student override, fall back to the class's monthly fee
+  // (so a teacher who only set fees in Settings → Classes still sees real totals).
+  let monthlyFee = Number(student.monthlyFee) || 0;
+  if (!monthlyFee && student.className && config?.classes?.length) {
+    const cls = config.classes.find(c => c.name === student.className);
+    if (cls?.monthlyFee) monthlyFee = Number(cls.monthlyFee) || 0;
+  }
   const perDay = working ? monthlyFee / working : 0;
 
   return {
@@ -1116,7 +1121,14 @@ app.get('/api/fees/dues/:id', authenticate, async (req, res) => {
     if (!parentScopeCheck(req, req.params.id)) return res.status(403).json({ error: 'Forbidden' });
     const student = await Student.findById(req.params.id);
     if (!student) return res.status(404).json({ error: 'Not found' });
-    const monthlyFee = Number(student.monthlyFee) || 0;
+    const config = await Config.findOne();
+    // Match the same fallback rule as computeStudentFees: per-student fee first,
+    // then class fee from settings, then 0.
+    let monthlyFee = Number(student.monthlyFee) || 0;
+    if (!monthlyFee && student.className && config?.classes?.length) {
+      const cls = config.classes.find(c => c.name === student.className);
+      if (cls?.monthlyFee) monthlyFee = Number(cls.monthlyFee) || 0;
+    }
 
     // Range: from enrollment month to current month (inclusive).
     const nowYM = istDateISO().substring(0, 7);
