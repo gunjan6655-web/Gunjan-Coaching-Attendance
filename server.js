@@ -43,11 +43,43 @@ const istTimeHM = () => {
 };
 
 // ===========================
-// MongoDB
+// MongoDB — cached connection
+// Works on BOTH Render (one always-on server) and Vercel (serverless functions
+// that reuse warm instances). The connection is created lazily and cached on
+// the global object so repeated invocations reuse the same pool instead of
+// opening a new connection every request.
 // ===========================
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost/coaching')
-  .then(() => console.log('✓ MongoDB connected'))
-  .catch(err => console.error('MongoDB error:', err));
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost/coaching';
+
+let _mongo = global.__gunjanMongo;
+if (!_mongo) _mongo = global.__gunjanMongo = { conn: null, promise: null };
+
+async function connectDB() {
+  if (_mongo.conn) return _mongo.conn;
+  if (!_mongo.promise) {
+    mongoose.set('strictQuery', false);
+    _mongo.promise = mongoose
+      .connect(MONGODB_URI, { maxPoolSize: 10, serverSelectionTimeoutMS: 15000 })
+      .then((m) => { console.log('✓ MongoDB connected'); return m; })
+      .catch((err) => {
+        _mongo.promise = null; // allow a retry on the next request
+        console.error('MongoDB error:', err);
+        throw err;
+      });
+  }
+  _mongo.conn = await _mongo.promise;
+  return _mongo.conn;
+}
+
+// Ensure the DB is connected before any /api route runs. On Render this connects
+// once on the first request; on Vercel it connects on each cold start and is
+// reused while the instance stays warm. Non-API routes (static frontend) skip it.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api')) return next();
+  connectDB().then(() => next()).catch(() =>
+    res.status(503).json({ error: 'Database connection failed. Please try again in a moment.' })
+  );
+});
 
 // ===========================
 // SCHEMAS
@@ -66,11 +98,14 @@ const ClassSchema = new mongoose.Schema({
 
 // A batch is a group of students that meets at a specific time.
 // weeklyOffDays is an array of weekday numbers (0=Sun, 1=Mon, ... 6=Sat).
+// customOffDays: when false the batch follows the coaching-wide weekly off-days
+// (Config.weeklyOffDays); when true it uses its own weeklyOffDays below.
 const BatchSchema = new mongoose.Schema({
   name: { type: String, required: true },
   startTime: { type: String, default: '09:00' },
   endTime:   { type: String, default: '11:00' },
   weeklyOffDays: { type: [Number], default: [0] }, // Sunday only by default
+  customOffDays: { type: Boolean, default: false },
 });
 
 const ConfigSchema = new mongoose.Schema({
@@ -85,6 +120,10 @@ const ConfigSchema = new mongoose.Schema({
   mapUrl: String,
   classStart: String,
   classEnd: String,
+  // Coaching-wide weekly off-days (0=Sun ... 6=Sat). Default: Sunday only.
+  // A teacher can mark Saturday off too, or make Sunday a working day, etc.
+  // Individual batches can override this when their customOffDays is true.
+  weeklyOffDays: { type: [Number], default: [0] },
   // Subjects are just names; fees attach to classes.
   subjects: { type: [SubjectSchema], default: [] },
   classes:  { type: [ClassSchema],   default: [] },
@@ -298,6 +337,20 @@ const ageFromDOB = (dob) => {
   const mDiff = (today.getMonth() + 1) - m;
   if (mDiff < 0 || (mDiff === 0 && today.getDate() < d)) age--;
   return age >= 0 && age < 150 ? age : null;
+};
+
+// Resolve the weekly off-days that apply to a given student:
+//  • if the student's batch has customOffDays → use that batch's weeklyOffDays
+//  • else use the coaching-wide Config.weeklyOffDays
+//  • else fall back to Sunday only
+// An explicit empty array means "no weekly off-days" (every day is a working day).
+const effectiveOffDays = (student, config) => {
+  if (student?.batchId && config?.batches?.length) {
+    const b = config.batches.find(x => String(x._id) === String(student.batchId));
+    if (b && b.customOffDays && Array.isArray(b.weeklyOffDays)) return b.weeklyOffDays;
+  }
+  if (config && Array.isArray(config.weeklyOffDays)) return config.weeklyOffDays;
+  return [0];
 };
 
 // ===========================
@@ -701,13 +754,9 @@ app.get('/api/attendance/summary/:studentId', authenticate, async (req, res) => 
     const present = records.filter(r => r.status === 'present').length;
     const absent = records.filter(r => r.status === 'absent').length;
 
-    // Work out off-days from the student's batch (Sunday-only default).
+    // Work out off-days for this student (batch override → coaching default → Sunday).
     const config = await Config.findOne();
-    let offDays = [0];
-    if (student.batchId && config?.batches?.length) {
-      const batch = config.batches.find(b => String(b._id) === String(student.batchId));
-      if (batch?.weeklyOffDays?.length) offDays = batch.weeklyOffDays;
-    }
+    const offDays = effectiveOffDays(student, config);
 
     // Establish enrollment date (fall back to joinDate, then today as safety).
     const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
@@ -778,15 +827,13 @@ app.get('/api/attendance/summary-all', authenticate, teacherOnly, async (req, re
     // Pull all students (need enrollment dates + batch for proper percentage).
     const students = await Student.find({ pendingApproval: { $ne: true } }).select('_id batchId enrollmentDate joinDate');
     const config = await Config.findOne();
-    const batchOffMap = new Map();
-    (config?.batches || []).forEach(b => batchOffMap.set(String(b._id), b.weeklyOffDays?.length ? b.weeklyOffDays : [0]));
     const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
 
     const countsByStudent = new Map(grouped.map(g => [String(g._id), { present: g.present, absent: g.absent }]));
     const summaries = {};
     for (const s of students) {
       const c = countsByStudent.get(String(s._id)) || { present: 0, absent: 0 };
-      const offDays = batchOffMap.get(String(s.batchId)) || [0];
+      const offDays = effectiveOffDays(s, config);
       let enrolled;
       if (s.enrollmentDate && /^\d{4}-\d{2}-\d{2}/.test(s.enrollmentDate)) {
         enrolled = new Date(s.enrollmentDate + 'T00:00:00');
@@ -1151,13 +1198,9 @@ const computeStudentFees = (student, config, yyyymm) => {
   const month = Number(mStr); // 1..12
   if (!year || !month) return null;
 
-  // Off days come from the student's batch, else Sunday only.
-  let offDays = [0];
-  if (student.batchId && config?.batches?.length) {
-    const batch = config.batches.id ? config.batches.id(student.batchId) :
-                  config.batches.find(b => String(b._id) === String(student.batchId));
-    if (batch?.weeklyOffDays?.length) offDays = batch.weeklyOffDays;
-  }
+  // Off days resolve from the student's batch (if it has custom off-days),
+  // otherwise the coaching-wide weekly off-days, otherwise Sunday only.
+  const offDays = effectiveOffDays(student, config);
 
   const { working, total } = workingDaysInMonth(year, month, offDays);
 
@@ -1342,7 +1385,7 @@ app.put('/api/config', authenticate, teacherOnly, async (req, res) => {
   try {
     const config = await Config.findOne();
     if (!config) return res.status(404).json({ error: 'Not found' });
-    const { teacherPassword, subjects, classes, batches, ...rest } = req.body;
+    const { teacherPassword, subjects, classes, batches, weeklyOffDays, ...rest } = req.body;
 
     // Subjects are just names now.
     if (subjects !== undefined) {
@@ -1364,6 +1407,11 @@ app.put('/api/config', authenticate, teacherOnly, async (req, res) => {
         monthlyFee: Number(c.monthlyFee) || 0,
       }));
     }
+    // Coaching-wide weekly off-days (0=Sun..6=Sat). Empty array = no weekly off-days.
+    if (weeklyOffDays !== undefined) {
+      config.weeklyOffDays = (Array.isArray(weeklyOffDays) ? weeklyOffDays : [])
+        .map(Number).filter(n => n >= 0 && n <= 6);
+    }
     if (batches !== undefined) {
       const names = (batches || []).map(b => (b.name || '').trim().toLowerCase());
       const dupes = names.filter((n, i) => n && names.indexOf(n) !== i);
@@ -1373,7 +1421,8 @@ app.put('/api/config', authenticate, teacherOnly, async (req, res) => {
         name: b.name,
         startTime: b.startTime || '09:00',
         endTime:   b.endTime   || '11:00',
-        weeklyOffDays: Array.isArray(b.weeklyOffDays) && b.weeklyOffDays.length ? b.weeklyOffDays : [0],
+        customOffDays: !!b.customOffDays,
+        weeklyOffDays: Array.isArray(b.weeklyOffDays) ? b.weeklyOffDays.map(Number).filter(n => n >= 0 && n <= 6) : [0],
       }));
     }
 
@@ -2400,8 +2449,16 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`\n✓ Server running on http://localhost:${PORT}`);
-  console.log(`✓ Timezone: ${TIMEZONE}`);
-  console.log('✓ API ready at /api/*\n');
-});
+// On Render / local we run a normal long-lived server. On Vercel the platform
+// imports `app` and invokes it per request, so we must NOT call listen there.
+if (!process.env.VERCEL) {
+  connectDB().catch(() => {}); // warm the pool on startup
+  app.listen(PORT, () => {
+    console.log(`\n✓ Server running on http://localhost:${PORT}`);
+    console.log(`✓ Timezone: ${TIMEZONE}`);
+    console.log('✓ API ready at /api/*\n');
+  });
+}
+
+// Vercel's serverless entry (api/index.js) imports this.
+export default app;
