@@ -10,7 +10,7 @@ import {
   Wallet, RotateCcw, KeyRound, IndianRupee, Layers,
   Camera, Sparkles, RefreshCw, AlertCircle, Inbox, Hash, Check,
   Mic, MicOff, Video, UserCheck, Navigation, Download, FileSpreadsheet, Paperclip,
-  Filter
+  Filter, Sun, Moon
 } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
@@ -202,6 +202,13 @@ export default function App() {
   const [view, setView] = useState('landing');
   const [info, setInfo] = useState({});
   const [role, setRole] = useState(localStorage.getItem('role'));
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
+
+  // Apply the light/dark theme to the whole document and remember the choice.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
   const [selectedStudent, setSelectedStudent] = useState(
     JSON.parse(localStorage.getItem('selectedStudent') || 'null')
   );
@@ -246,9 +253,10 @@ export default function App() {
     refreshInfo();
   };
 
-  if (view === 'landing') return <Landing info={info} onSignIn={() => setView('login')} onRegister={() => setView('register')} />;
-  if (view === 'register') return <Register info={info} onBack={() => setView('landing')} onDone={() => setView('login')} />;
-  if (view === 'login') return <Login info={info} onBack={() => setView('landing')} onLogin={(role, student) => {
+  let page = null;
+  if (view === 'landing') page = <Landing info={info} onSignIn={() => setView('login')} onRegister={() => setView('register')} />;
+  else if (view === 'register') page = <Register info={info} onBack={() => setView('landing')} onDone={() => setView('login')} />;
+  else if (view === 'login') page = <Login info={info} onBack={() => setView('landing')} onLogin={(role, student) => {
     setRole(role); refreshInfo();
     if (role === 'parent' && student) {
       setSelectedStudent(student);
@@ -262,10 +270,26 @@ export default function App() {
       setView('teacher');
     }
   }} />;
-  if (view === 'teacher') return <TeacherDashboard info={info} announcements={announcements} onSignOut={handleSignOut} refreshInfo={refreshInfo} />;
-  if (view === 'parent') return <ParentDashboard student={selectedStudent} info={info} announcements={announcements} onSignOut={handleSignOut} />;
-  if (view === 'student') return <StudentChatDashboard student={selectedStudent} info={info} announcements={announcements} onSignOut={handleSignOut} />;
-  return null;
+  else if (view === 'teacher') page = <TeacherDashboard info={info} announcements={announcements} onSignOut={handleSignOut} refreshInfo={refreshInfo} />;
+  else if (view === 'parent') page = <ParentDashboard student={selectedStudent} info={info} announcements={announcements} onSignOut={handleSignOut} />;
+  else if (view === 'student') page = <StudentChatDashboard student={selectedStudent} info={info} announcements={announcements} onSignOut={handleSignOut} />;
+
+  return (<>{page}<ThemeToggleFab theme={theme} setTheme={setTheme} /></>);
+}
+
+// Floating light/dark theme toggle — visible on every screen, bottom-left so it
+// never collides with other corner buttons.
+function ThemeToggleFab({ theme, setTheme }) {
+  return (
+    <button
+      className="theme-fab"
+      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label="Toggle dark mode"
+    >
+      {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+    </button>
+  );
 }
 
 // ============================
@@ -1389,12 +1413,17 @@ function TodayTab({ info, announcements }) {
         </div>
       )}
 
-      {selDow === 0 && (
-        <div className="off-day-banner" style={{ background: '#fef3c7', borderLeft: '4px solid #d97706', padding: '10px 14px', borderRadius: 8, margin: '12px 0' }}>
-          <strong>⚠️ This day is a Sunday (off-day)</strong>
-          <p className="small" style={{ margin: 0 }}>Marking present is allowed but won't count toward the working-day fee calculation.</p>
-        </div>
-      )}
+      {(() => {
+        const offWeekdays = Array.isArray(info?.weeklyOffDays) ? info.weeklyOffDays : [0];
+        const dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][selDow];
+        if (!offWeekdays.includes(selDow)) return null;
+        return (
+          <div className="off-day-banner" style={{ background: '#fef3c7', borderLeft: '4px solid #d97706', padding: '10px 14px', borderRadius: 8, margin: '12px 0' }}>
+            <strong>⚠️ {dayName} is a weekly off-day</strong>
+            <p className="small" style={{ margin: 0 }}>Marking present is allowed but this day doesn't count toward the working-day fee calculation. You can change weekly off-days in Settings.</p>
+          </div>
+        );
+      })()}
 
       <div className="toolbar">
         <div className="search-bar" style={{ flex: '1 1 180px', minWidth: 160 }}>
@@ -2383,7 +2412,22 @@ function FeesTab({ info }) {
   rows = rows.sort((a, b) => Number(a.rollNumber || 999) - Number(b.rollNumber || 999));
 
   const monthlyTotal = rows.reduce((a, r) => a + (r.fees?.monthlyFee || 0), 0);
-  const dailyTotal   = rows.reduce((a, r) => a + (r.fees?.perDay     || 0), 0);
+
+  // Plain working-day math so the per-day fee is no longer a mystery.
+  const offs = Array.isArray(info?.weeklyOffDays) ? info.weeklyOffDays : [0];
+  const fullDayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const offNames = offs.slice().sort((a, b) => a - b).map(d => fullDayNames[d]);
+  const wd = (() => {
+    const [y, m] = month.split('-').map(Number);
+    const days = new Date(y, m, 0).getDate();
+    let w = 0;
+    for (let d = 1; d <= days; d++) { if (!offs.includes(new Date(y, m - 1, d).getDay())) w++; }
+    return { w, total: days };
+  })();
+  const monShort = (() => {
+    const [y, m] = month.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'short' });
+  })();
 
   // Group by class for the chart (cleaner than by batch now that fees attach to class).
   const groups = {};
@@ -2410,9 +2454,20 @@ function FeesTab({ info }) {
         />
       </div>
 
+      <div className="fees-explainer">
+        <h4><Info size={14} /> How these fees are calculated</h4>
+        <ol>
+          <li><strong>Monthly fee</strong> comes from the student's class (Settings → Classes) or a custom amount set on the student.</li>
+          <li><strong>Working days</strong> = every day in {monthLabel(month)} except your weekly off-days{offNames.length ? ` (${offNames.join(', ')})` : ' (none set)'}. That's <strong>{wd.w} working days</strong> out of {wd.total}.</li>
+          <li><strong>Per day = monthly fee ÷ working days.</strong> Example: {formatRupee(1000)} ÷ {wd.w} = <strong>{formatRupee(Math.round(1000 / (wd.w || 1)))}/day</strong>.</li>
+          <li>Per-day is only used to <strong>pro-rate</strong> a student who joins or leaves mid-month — normally you collect the full monthly fee.</li>
+        </ol>
+        <p className="small muted" style={{ margin: '6px 0 0' }}>Change weekly off-days in <strong>Settings → Weekly Off Days</strong>. Announced holidays do not change the working-day count.</p>
+      </div>
+
       <div className="summary-stats">
         <div className="stat-big green"><strong>{formatRupee(monthlyTotal)}</strong><span>Total / month</span></div>
-        <div className="stat-big blue"><strong>{formatRupee(Math.round(dailyTotal))}</strong><span>Total / working day</span></div>
+        <div className="stat-big blue"><strong>{wd.w}</strong><span>Working days · {monShort}</span></div>
         <div className="stat-big"><strong>{rows.length}</strong><span>Students</span></div>
       </div>
 
@@ -2530,7 +2585,7 @@ function FeesTab({ info }) {
       </div>
 
       <p className="small muted" style={{ marginTop: 12 }}>
-        <Info size={12} /> Per-day = monthly fee ÷ working days. Working days = total days minus weekly off (Sunday by default). Announced holidays do <strong>not</strong> reduce the working-day count.
+        <Info size={12} /> Per-day = monthly fee ÷ working days. Working days = total days minus weekly off-days{offNames.length ? ` (${offNames.join(', ')})` : ' (none)'}. Announced holidays do <strong>not</strong> reduce the working-day count.
       </p>
       {openFor && (
         <StudentFeeDetailModal
@@ -2674,6 +2729,7 @@ function StudentFeeDetailModal({ student, month, info, onClose, onChanged }) {
           <span>Working days</span>
         </div>
       </div>
+      <p className="fee-formula">{formatRupee(monthlyFee)} ÷ {fees.workingDays || 0} working days = <strong>{formatRupee(Math.round(fees.perDay || 0))} / day</strong></p>
 
       <div className="info-card" style={{ marginTop: 12 }}>
         <div className="row" style={{ justifyContent: 'space-between', margin: 0 }}>
@@ -2937,9 +2993,10 @@ function SettingsTab({ info, refreshInfo }) {
   useEffect(() => {
     setForm({
       ...info,
+      weeklyOffDays: Array.isArray(info.weeklyOffDays) ? info.weeklyOffDays : [0],
       subjects: (info.subjects || []).map(s => ({ name: typeof s === 'string' ? s : s.name })),
       classes:  (info.classes  || []).map(c => ({ ...c, monthlyFee: Number(c.monthlyFee) || 0 })),
-      batches:  (info.batches  || []).map(b => ({ ...b })),
+      batches:  (info.batches  || []).map(b => ({ ...b, customOffDays: !!b.customOffDays })),
     });
   }, [info]);
 
@@ -2948,6 +3005,7 @@ function SettingsTab({ info, refreshInfo }) {
     try {
       const body = {
         ...form,
+        weeklyOffDays: Array.isArray(form.weeklyOffDays) ? form.weeklyOffDays : [0],
         subjects: (form.subjects || []).map(s => ({ name: (s.name || '').trim() })).filter(s => s.name),
         classes:  (form.classes  || []).map(c => ({
           _id: c._id, name: (c.name || '').trim(), monthlyFee: Number(c.monthlyFee) || 0,
@@ -2955,6 +3013,7 @@ function SettingsTab({ info, refreshInfo }) {
         batches:  (form.batches  || []).map(b => ({
           _id: b._id, name: (b.name || '').trim(),
           startTime: b.startTime || '09:00', endTime: b.endTime || '11:00',
+          customOffDays: !!b.customOffDays,
           weeklyOffDays: (b.weeklyOffDays && b.weeklyOffDays.length) ? b.weeklyOffDays : [0]
         })).filter(b => b.name),
       };
@@ -3028,6 +3087,26 @@ function SettingsTab({ info, refreshInfo }) {
       })
     }));
   };
+  // Coaching-wide weekly off-days (the simple Sat/Sun toggle the teacher asked for).
+  const toggleGlobalOffDay = (dow) => {
+    setForm(f => {
+      const cur = Array.isArray(f.weeklyOffDays) ? f.weeklyOffDays : [0];
+      return { ...f, weeklyOffDays: cur.includes(dow) ? cur.filter(d => d !== dow) : [...cur, dow].sort() };
+    });
+  };
+  // Turn per-batch custom off-days on/off. When turning on with nothing set yet,
+  // seed it from the current coaching-wide default so it's a sensible starting point.
+  const toggleBatchCustom = (idx, on) => {
+    setForm(f => ({
+      ...f,
+      batches: (f.batches || []).map((b, i) => {
+        if (i !== idx) return b;
+        const seed = (Array.isArray(f.weeklyOffDays) ? f.weeklyOffDays : [0]);
+        const wod = on && (!b.weeklyOffDays || !b.weeklyOffDays.length) ? seed : (b.weeklyOffDays || []);
+        return { ...b, customOffDays: on, weeklyOffDays: wod };
+      })
+    }));
+  };
   const removeBatch = (idx) => {
     if (!confirm('Remove this batch? Students assigned to it will become unassigned.')) return;
     setForm(f => ({ ...f, batches: (f.batches || []).filter((_, i) => i !== idx) }));
@@ -3081,8 +3160,27 @@ function SettingsTab({ info, refreshInfo }) {
       <input type="time" value={form.classEnd || ''} onChange={e => setForm({...form, classEnd: e.target.value})} />
 
       <hr />
+      <h3><CalendarOff size={16} /> Weekly Off Days</h3>
+      <p className="small muted">Pick the days your coaching is normally closed. These days are <strong>not</strong> counted as working days when fees are split per day. Default is <strong>Sunday only</strong> — tap a day to mark it off or working. For example, tap <strong>Sat</strong> to also close Saturdays, or tap <strong>Sun</strong> to make Sundays working.</p>
+      <div className="chip-group">
+        {dayNames.map((d, dow) => (
+          <button key={dow} type="button"
+            className={'chip-toggle' + ((form.weeklyOffDays || [0]).includes(dow) ? ' on' : '')}
+            onClick={() => toggleGlobalOffDay(dow)}>{d}</button>
+        ))}
+      </div>
+      <p className="small muted" style={{ marginTop: 6 }}>
+        {(() => {
+          const offs = (form.weeklyOffDays || []);
+          const full = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+          if (!offs.length) return 'No weekly off-days set — every day counts as a working day.';
+          return 'Currently closed on: ' + offs.slice().sort((a,b)=>a-b).map(d => full[d]).join(', ') + '.';
+        })()}
+      </p>
+
+      <hr />
       <h3><Layers size={16} /> Batches (each can have its own timing & off-days)</h3>
-      <p className="small muted">Default off-day is Sunday only.</p>
+      <p className="small muted">By default every batch follows the Weekly Off Days set above. Turn on “custom off-days” for a batch only if it meets on different days.</p>
       <div className="batch-list">
         {(form.batches || []).map((b, i) => (
           <div key={b._id || i} className="batch-card">
@@ -3097,17 +3195,27 @@ function SettingsTab({ info, refreshInfo }) {
               <input type="time" value={b.endTime || ''} onChange={e => updateBatch(i, { endTime: e.target.value })} />
             </div>
             <div>
-              <label style={{ marginTop: 8 }}>Weekly off days</label>
-              <div className="chip-group">
-                {dayNames.map((d, dow) => (
-                  <button
-                    key={dow}
-                    type="button"
-                    className={'chip-toggle' + ((b.weeklyOffDays || []).includes(dow) ? ' on' : '')}
-                    onClick={() => toggleBatchOffDay(i, dow)}
-                  >{d}</button>
-                ))}
-              </div>
+              <label className="checkbox-label" style={{ background: 'transparent', padding: 0, marginTop: 8 }}>
+                <input type="checkbox" checked={!!b.customOffDays} onChange={e => toggleBatchCustom(i, e.target.checked)} />
+                <span>Custom off-days for this batch</span>
+              </label>
+              {b.customOffDays ? (
+                <>
+                  <div className="chip-group" style={{ marginTop: 6 }}>
+                    {dayNames.map((d, dow) => (
+                      <button
+                        key={dow}
+                        type="button"
+                        className={'chip-toggle' + ((b.weeklyOffDays || []).includes(dow) ? ' on' : '')}
+                        onClick={() => toggleBatchOffDay(i, dow)}
+                      >{d}</button>
+                    ))}
+                  </div>
+                  <p className="small muted" style={{ marginTop: 4 }}>This batch uses its own off-days selected above.</p>
+                </>
+              ) : (
+                <p className="small muted" style={{ marginTop: 4 }}>Follows the coaching default (Weekly Off Days).</p>
+              )}
             </div>
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <button className="btn btn-outline btn-mini" onClick={() => removeBatch(i)}>
