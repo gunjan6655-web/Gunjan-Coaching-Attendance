@@ -15,6 +15,9 @@
   ],
   "author": "You",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "bcryptjs": "^2.4.3",
