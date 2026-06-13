@@ -2482,3 +2482,286 @@ textarea { resize: vertical; min-height: 60px; }
   .batch-breakdown-count { grid-column: 1; grid-row: 2; font-size: 11px; }
   .batch-breakdown-total { grid-column: 2; grid-row: 1 / 3; align-self: center; }
 }
+
+/* =====================================================================
+   v4: LIGHT / DARK THEME, THEME TOGGLE, FEES EXPLAINER
+   The toggle sets data-theme="dark" on <html>. Every dark rule below is
+   prefixed with [data-theme="dark"], which raises specificity so it wins
+   over the matching light rule no matter the source order.
+   ===================================================================== */
+
+:root {
+  --bg: #faf7f2;
+  --surface: #ffffff;
+  --surface-2: #f5f0e9;
+  --text: #1f1f1f;
+  --muted: #666666;
+  --border: #e7e2da;
+  --accent: #c2410c;
+}
+[data-theme="dark"] {
+  --bg: #0f1115;
+  --surface: #1a1d23;
+  --surface-2: #232830;
+  --text: #e6e8eb;
+  --muted: #9aa0a6;
+  --border: #2c313a;
+  --accent: #fb923c;
+}
+
+/* Floating theme toggle (bottom-left so it never collides with other corners) */
+.theme-fab {
+  position: fixed;
+  bottom: 22px;
+  left: 22px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  z-index: 60;
+  transition: transform 0.15s ease, background 0.2s ease, color 0.2s ease;
+}
+.theme-fab:hover { transform: translateY(-2px) scale(1.05); }
+[data-theme="dark"] .theme-fab { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
+@media (max-width: 480px) { .theme-fab { bottom: 16px; left: 16px; width: 42px; height: 42px; } }
+
+/* Fees "how it's calculated" explainer box */
+.fees-explainer {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 12px;
+  padding: 14px 16px 12px;
+  margin: 4px 0 14px;
+}
+.fees-explainer h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #0369a1;
+}
+.fees-explainer ol { margin: 0; padding-left: 20px; }
+.fees-explainer li { font-size: 13.5px; line-height: 1.6; color: #334155; margin-bottom: 3px; }
+.fees-explainer strong { color: #0f172a; }
+
+/* Explicit per-day formula line inside the fee detail modal */
+.fee-formula {
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0 2px;
+  font-size: 14px;
+  color: #475569;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.fee-formula strong { color: #0f172a; }
+
+/* ===================== DARK THEME OVERRIDES ===================== */
+[data-theme="dark"] body { background: var(--bg); color: var(--text); }
+[data-theme="dark"] .page,
+[data-theme="dark"] .page-center { background: var(--bg); }
+[data-theme="dark"] a { color: var(--accent); }
+[data-theme="dark"] hr { border-top-color: var(--border); }
+[data-theme="dark"] .muted,
+[data-theme="dark"] .small.muted,
+[data-theme="dark"] p.muted { color: var(--muted); }
+
+/* Headers / footer */
+[data-theme="dark"] .header,
+[data-theme="dark"] .dashboard-header,
+[data-theme="dark"] .dash-header,
+[data-theme="dark"] .footer { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .logo h1,
+[data-theme="dark"] h1, [data-theme="dark"] h2, [data-theme="dark"] h3,
+[data-theme="dark"] h4, [data-theme="dark"] .display { color: var(--text); }
+[data-theme="dark"] .footer { color: var(--muted); }
+
+/* Hero */
+[data-theme="dark"] .hero { background: linear-gradient(135deg, #1a1410 0%, #241a12 100%); }
+[data-theme="dark"] .hero p, [data-theme="dark"] .hero-sub { color: #c8b9a8; }
+
+/* Generic surfaces */
+[data-theme="dark"] .card,
+[data-theme="dark"] .info-card,
+[data-theme="dark"] .info-row,
+[data-theme="dark"] .student-card,
+[data-theme="dark"] .attendance-card,
+[data-theme="dark"] .announcement-card,
+[data-theme="dark"] .history-row,
+[data-theme="dark"] .list-item,
+[data-theme="dark"] .stat,
+[data-theme="dark"] .stat-big,
+[data-theme="dark"] .chart-card,
+[data-theme="dark"] .fee-row,
+[data-theme="dark"] .fee-card,
+[data-theme="dark"] .batch-card,
+[data-theme="dark"] .storage-card,
+[data-theme="dark"] .msg-row,
+[data-theme="dark"] .parent-conv,
+[data-theme="dark"] .pending-fee-row,
+[data-theme="dark"] .att-graph-card,
+[data-theme="dark"] .date-bar { background: var(--surface); border-color: var(--border); color: var(--text); }
+[data-theme="dark"] .card p, [data-theme="dark"] .card h3 { color: var(--text); }
+
+[data-theme="dark"] .list-item:hover { background: var(--surface-2); }
+[data-theme="dark"] .list-item.active { background: #2a2018; border-color: var(--accent); }
+
+/* Card text that is hard-coded dark in light mode */
+[data-theme="dark"] .info-dl dd,
+[data-theme="dark"] .fee-row-name,
+[data-theme="dark"] .fee-row-month,
+[data-theme="dark"] .stat-big strong,
+[data-theme="dark"] .att-stat strong,
+[data-theme="dark"] .fee-detail-card strong,
+[data-theme="dark"] .chat-text,
+[data-theme="dark"] .student-mode-tile strong,
+[data-theme="dark"] .picked-name { color: var(--text); }
+[data-theme="dark"] .info-dl dt,
+[data-theme="dark"] .fee-row-day,
+[data-theme="dark"] .att-stat span,
+[data-theme="dark"] .stat-big span,
+[data-theme="dark"] .fee-detail-card span { color: var(--muted); }
+
+/* Big status cards keep their tints but darken the neutral one */
+[data-theme="dark"] .big-card { background: var(--surface); border-color: var(--border); color: var(--text); }
+[data-theme="dark"] .big-card.muted-card { background: #20242b; border-color: var(--border); color: var(--muted); }
+
+/* Inputs */
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select {
+  background: #14171c;
+  color: var(--text);
+  border-color: var(--border);
+}
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder { color: #6b7280; }
+[data-theme="dark"] input:focus,
+[data-theme="dark"] textarea:focus,
+[data-theme="dark"] select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.15); }
+[data-theme="dark"] .search-bar,
+[data-theme="dark"] .search-big { background: #14171c; border-color: var(--border); }
+[data-theme="dark"] .search-bar input { background: transparent; color: var(--text); }
+
+/* Tabs / nav */
+[data-theme="dark"] .tabs { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .tab { color: var(--muted); }
+[data-theme="dark"] .tab:hover { color: var(--text); }
+[data-theme="dark"] .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+[data-theme="dark"] .dash-nav { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .dash-nav button { color: var(--muted); }
+[data-theme="dark"] .dash-nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Buttons that are light in light mode */
+[data-theme="dark"] .btn-outline { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .btn-outline:hover { background: #2c333d; }
+[data-theme="dark"] .btn-back { background: transparent; color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .btn-back:hover { background: var(--surface-2); }
+[data-theme="dark"] .icon-btn { background: transparent; color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .icon-btn:hover { background: var(--surface-2); }
+
+/* Modal */
+[data-theme="dark"] .modal { background: var(--surface); color: var(--text); }
+[data-theme="dark"] .modal-header { border-color: var(--border); }
+
+/* Empty state */
+[data-theme="dark"] .empty { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .empty p { color: var(--muted); }
+[data-theme="dark"] .success-box { background: var(--surface); border-color: var(--border); }
+
+/* Chips / checkboxes */
+[data-theme="dark"] .chip-toggle { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .chip-toggle.on { background: var(--accent); color: #1a1206; border-color: var(--accent); }
+[data-theme="dark"] .chip-static { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .checkbox-label,
+[data-theme="dark"] .radio-label { background: var(--surface-2); color: var(--text); }
+[data-theme="dark"] .day-btn { background: #14171c; color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .day-btn.selected { background: var(--accent); color: #1a1206; border-color: var(--accent); }
+
+/* Login hints / pending / breakdown helper panels */
+[data-theme="dark"] .login-hints { background: var(--surface-2); border-color: var(--border); }
+[data-theme="dark"] .login-hint { color: var(--text); }
+[data-theme="dark"] .pending-section { background: #2a2410; border-color: #5a4a17; }
+[data-theme="dark"] .pending-card { background: var(--surface); border-color: #4a3f20; }
+[data-theme="dark"] .upcoming-birthdays { background: #2a2210; border-color: #5a4a17; }
+[data-theme="dark"] .upcoming-chip { background: var(--surface); border-color: #5a4a17; color: var(--text); }
+[data-theme="dark"] .batch-breakdown { background: #14171c; border-color: var(--border); }
+[data-theme="dark"] .batch-breakdown-row { background: var(--surface); border-color: var(--border); color: var(--text); }
+[data-theme="dark"] .batch-breakdown-row:hover { background: var(--surface-2); }
+[data-theme="dark"] .batch-breakdown-name { color: var(--text); }
+
+/* Filter pills + sheet */
+[data-theme="dark"] .filter-pill { background: var(--surface); color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .filter-pill:hover { border-color: #4a525e; }
+[data-theme="dark"] .filter-pill.disabled { background: var(--surface-2); color: var(--muted); }
+[data-theme="dark"] .filter-options { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .filter-option { border-color: var(--border); }
+[data-theme="dark"] .filter-option:hover { background: var(--surface-2); }
+
+/* Fee detail cards */
+[data-theme="dark"] .fee-detail-card { background: #14171c; border-color: var(--border); }
+[data-theme="dark"] .fee-detail-header { border-color: var(--border); }
+
+/* Attendance graph cells */
+[data-theme="dark"] .att-stat { background: #14171c; }
+[data-theme="dark"] .att-cal-cell { background: #20262e; color: var(--muted); }
+[data-theme="dark"] .att-cal-cell.unmarked { background: #2a313b; color: var(--muted); }
+[data-theme="dark"] .att-cal-cell.future { background: #181c22; color: #3f4753; }
+[data-theme="dark"] .att-rate-note { background: #14171c; border-color: var(--border); color: var(--muted); }
+[data-theme="dark"] .att-bar-none { background: #2a313b; color: var(--muted); }
+
+/* Storage card internals */
+[data-theme="dark"] .storage-bar { background: #2a313b; }
+[data-theme="dark"] .storage-legend-row { border-color: var(--border); }
+
+/* Chat */
+[data-theme="dark"] .chat-shell { background: #0c0e12; border-color: var(--border); }
+[data-theme="dark"] .chat-header { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .chat-body { background-image: radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px); }
+[data-theme="dark"] .chat-msg { background: var(--surface); border-color: var(--border); color: var(--text); }
+[data-theme="dark"] .chat-msg.me { background: #143d2a; border-color: #1d5e3d; }
+[data-theme="dark"] .chat-msg.teacher { background: #3a3210; border-color: #5a4a17; }
+[data-theme="dark"] .chat-text { color: var(--text); }
+[data-theme="dark"] .chat-meta strong { color: #5ed6a7; }
+[data-theme="dark"] .chat-input-row { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .chat-media-btn { color: var(--muted); }
+[data-theme="dark"] .chat-media-btn:hover { background: var(--surface-2); }
+[data-theme="dark"] .emoji-picker,
+[data-theme="dark"] .media-menu { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .emoji-btn:hover { background: var(--surface-2); }
+[data-theme="dark"] .media-menu-btn { color: var(--text); }
+[data-theme="dark"] .media-menu-btn:hover { background: var(--surface-2); }
+
+/* AI assistant panel */
+[data-theme="dark"] .ai-panel { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .ai-body { background: #0c0e12; }
+[data-theme="dark"] .ai-bubble.bot { background: var(--surface); color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .ai-input-row { background: var(--surface); border-color: var(--border); }
+[data-theme="dark"] .ai-inline { background: var(--surface); border-color: var(--border); }
+
+/* Code */
+[data-theme="dark"] .inline-code { background: #2a2018; border-color: #5a4a2a; color: #fdba74; }
+
+/* Fees explainer + formula in dark */
+[data-theme="dark"] .fees-explainer { background: #0e1f2a; border-color: #1e4a5f; }
+[data-theme="dark"] .fees-explainer h4 { color: #7dd3fc; }
+[data-theme="dark"] .fees-explainer li { color: #c7d2db; }
+[data-theme="dark"] .fees-explainer strong { color: #e6e8eb; }
+[data-theme="dark"] .fee-formula { background: #14171c; border-color: var(--border); color: var(--muted); }
+[data-theme="dark"] .fee-formula strong { color: var(--text); }
+
+/* Misc dark text fixes */
+[data-theme="dark"] .student-count-badge { background: #2a2018; color: #fdba74; }
+[data-theme="dark"] .att-expand,
+[data-theme="dark"] .fee-expand { background: #14171c; border-color: var(--border); }
+[data-theme="dark"] .filter-chip-row { background: #2a2410; border-color: #5a4a17; color: #fdba74; }
