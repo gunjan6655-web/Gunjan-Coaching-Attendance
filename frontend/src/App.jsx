@@ -2977,6 +2977,39 @@ function AnnouncementsTab({ info }) {
 }
 
 // ============================
+// APPEARANCE — switch between the new "Modern" look and the original "Classic".
+// Stored in localStorage; applied as data-ui on <html> (set pre-paint in index.html).
+// ============================
+function AppearanceToggle() {
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem('designMode') || 'modern'; } catch { return 'modern'; }
+  });
+  const apply = (m) => {
+    setMode(m);
+    try { localStorage.setItem('designMode', m); } catch {}
+    document.documentElement.setAttribute('data-ui', m);
+  };
+  return (
+    <div className="appearance-card">
+      <div>
+        <h3 style={{ margin: 0 }}><Sparkles size={16} /> Appearance</h3>
+        <p className="small muted" style={{ margin: '4px 0 0' }}>
+          Choose how the app looks. <strong>Modern</strong> is the new design; <strong>Classic</strong> is the original.
+        </p>
+      </div>
+      <div className="appearance-switch">
+        <button className={'appearance-opt' + (mode === 'modern' ? ' on' : '')} onClick={() => apply('modern')}>
+          ✨ Modern
+        </button>
+        <button className={'appearance-opt' + (mode === 'classic' ? ' on' : '')} onClick={() => apply('classic')}>
+          🗂️ Classic
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================
 // SETTINGS TAB — subjects (names only), classes (with fees), batches, teacher password, storage
 // ============================
 function SettingsTab({ info, refreshInfo }) {
@@ -3117,6 +3150,8 @@ function SettingsTab({ info, refreshInfo }) {
   return (
     <div className="container-narrow">
       <h2 className="display">Coaching Center Settings</h2>
+      <AppearanceToggle />
+      <hr />
 
       <h3 style={{ marginBottom: 8 }}><Camera size={16} /> My Profile Photo</h3>
       <p className="small muted">Students and parents will see this photo in contact info.</p>
@@ -3966,7 +4001,7 @@ function ParentDashboard({ student, info, announcements, onSignOut }) {
         <div style={{display: tab==='announcements' || tab==='holidays' ? '' : 'none'}}><AnnouncementList announcements={announcements} info={info} /></div>
         <div style={{display: tab==='exams' ? '' : 'none'}}><h3><BookOpen size={16} /> Exams & Tests</h3><ExamList /></div>
         <div style={{display: tab==='chat' ? '' : 'none'}}><ParentTeacherChat studentId={student._id} role="parent" currentName={student?.parentName || 'Parent'} /></div>
-        <div style={{display: tab==='info' ? '' : 'none'}}><ClassInfo info={info} student={student} /></div>
+        <div style={{display: tab==='info' ? '' : 'none'}}><ClassInfo info={info} student={student} /><hr /><AppearanceToggle /></div>
       </main>
     </div>
   );
@@ -4761,10 +4796,12 @@ function StudentChatDashboard({ student, info, announcements, onSignOut }) {
         {tab === 'holidays' && <div className="container-narrow"><h3><CalendarOff size={16} /> Holidays & Announcements</h3><AnnouncementList announcements={announcements || []} info={info} /></div>}
         {tab === 'complaint' && <div className="container-narrow"><ComplaintCompose /></div>}
         {tab === 'profile' && (
-          <div>
+          <div className="container-narrow">
             <StudentProfilePhoto student={student} />
             <hr />
             <StudentBioEditor student={student} />
+            <hr />
+            <AppearanceToggle />
           </div>
         )}
       </main>

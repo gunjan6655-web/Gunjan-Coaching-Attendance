@@ -20,6 +20,16 @@
 
     <!-- Web app manifest -->
     <link rel="manifest" href="/manifest.json" />
+
+    <!-- Apply the saved UI design (Modern default / Classic) before first paint
+         so there's no flash of the wrong theme. -->
+    <script>
+      try {
+        document.documentElement.setAttribute('data-ui', localStorage.getItem('designMode') || 'modern');
+      } catch (e) {
+        document.documentElement.setAttribute('data-ui', 'modern');
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
